@@ -16,10 +16,13 @@ pytestmark = [
 ]
 
 
-def test_clean_baseline_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_complete_migration_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     assert DISPOSABLE_URL is not None
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("DATABASE_URL", DISPOSABLE_URL)
+    monkeypatch.setenv("JWT_SECRET", "synthetic-jwt-signing-secret-at-least-32-bytes")
+    monkeypatch.setenv("JWT_ISSUER", "synthetic-issuer")
+    monkeypatch.setenv("JWT_AUDIENCE", "synthetic-audience")
 
     assert disposable_alembic.main(["upgrade", "head"]) == 0
     assert disposable_alembic.main(["current"]) == 0

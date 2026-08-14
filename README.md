@@ -76,8 +76,21 @@ Local setup:
 5. Start the application factory with
    `uv run --project backend --env-file .env uvicorn app.main:create_app --factory`.
 
-The current accepted route surface is limited to `GET /api/v1/health`. Domain
-features are added only through later milestones.
+The current M2 route surface is limited to `GET /api/v1/health`,
+`POST /api/v1/auth/login`, and protected `GET /api/v1/auth/me`. Domain features
+are added only through later milestones.
+
+After applying the M2 migration, provision the one local development
+administrator with `ADMIN_BOOTSTRAP_USERNAME` and `ADMIN_BOOTSTRAP_PASSWORD`
+set only in the ignored environment file:
+
+```text
+uv run --project backend --env-file .env wedding-bootstrap-admin
+```
+
+The command is development-only, refuses to overwrite an existing account,
+and requires the exact M2 schema revision. Remove the bootstrap password from
+the local environment after provisioning succeeds.
 
 Foundation verification:
 

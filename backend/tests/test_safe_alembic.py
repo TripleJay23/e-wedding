@@ -9,6 +9,12 @@ from app.cli import disposable_alembic, safe_alembic
 from app.core.settings import AppEnvironment, Settings
 from app.db.guards import DatabaseSafetyError
 
+SYNTHETIC_AUTH_SETTINGS = {
+    "JWT_SECRET": "synthetic-jwt-signing-secret-at-least-32-bytes",
+    "JWT_ISSUER": "synthetic-issuer",
+    "JWT_AUDIENCE": "synthetic-audience",
+}
+
 
 def test_mutating_command_requires_explicit_revision() -> None:
     parser = safe_alembic.build_parser()
@@ -32,6 +38,7 @@ def test_disposable_wrapper_rejects_development_environment(
     settings = Settings(
         APP_ENV=AppEnvironment.DEVELOPMENT,
         DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@localhost/wedding_ecard_dev",
+        **SYNTHETIC_AUTH_SETTINGS,
     )
     monkeypatch.setattr(disposable_alembic, "Settings", lambda: settings)
 
@@ -47,6 +54,7 @@ def test_execute_refuses_staging_mutation_before_engine_creation(
         DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@db/wedding_ecard_staging",
         PRIVATE_STORAGE_ROOT="C:/private",
         IMPORT_EVIDENCE_STORAGE_ROOT="C:/private/evidence",
+        **SYNTHETIC_AUTH_SETTINGS,
     )
     args = argparse.Namespace(command="upgrade", revision="head")
     engine_called = False
@@ -146,6 +154,7 @@ def test_disposable_main_executes_for_valid_test_target(
         APP_ENV=AppEnvironment.TEST,
         DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@localhost/"
         "wedding_ecard_disposable_cli",
+        **SYNTHETIC_AUTH_SETTINGS,
     )
     calls: list[str] = []
     monkeypatch.setattr(disposable_alembic, "Settings", lambda: settings)

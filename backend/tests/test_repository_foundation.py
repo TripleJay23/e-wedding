@@ -33,7 +33,7 @@ def test_private_and_generated_artifacts_are_ignored() -> None:
         assert required_pattern in content
 
 
-def test_no_future_business_route_modules_exist() -> None:
+def test_route_modules_are_limited_to_m1_and_m2() -> None:
     route_files = {path.stem for path in (BACKEND_ROOT / "app" / "api" / "routes").glob("*.py")}
 
-    assert route_files == {"__init__", "health"}
+    assert route_files == {"__init__", "auth", "health"}

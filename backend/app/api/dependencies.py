@@ -1,9 +1,18 @@
 """Shared FastAPI dependencies."""
 
 from collections.abc import Generator
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Depends, HTTPException, Request, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+
+from app.core.security import AuthenticationSecurity
+from app.models.administrator import Administrator
+from app.repositories.administrators import AdministratorRepository
+from app.services.authentication import AuthenticationRejectedError, AuthenticationService
+
+bearer_scheme = HTTPBearer(auto_error=False, scheme_name="AdministratorBearer")
 
 
 def get_database_session(request: Request) -> Generator[Session, None, None]:
@@ -13,3 +22,40 @@ def get_database_session(request: Request) -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+def get_authentication_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_database_session)],
+) -> AuthenticationService:
+    """Build a request-scoped service over the process-scoped security policy."""
+    security: AuthenticationSecurity = request.app.state.authentication_security
+    return AuthenticationService(
+        AdministratorRepository(session),
+        security.passwords,
+        security.access_tokens,
+    )
+
+
+def get_current_administrator(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Security(bearer_scheme),
+    ],
+    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
+) -> Administrator:
+    """Require a valid bearer token for an active persisted SUPER_ADMIN."""
+    if credentials is None or credentials.scheme.casefold() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return service.current_administrator(credentials.credentials)
+    except AuthenticationRejectedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc

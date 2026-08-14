@@ -65,7 +65,7 @@ def validated_database_url(settings: Settings) -> tuple[URL, DatabaseIdentity]:
         if database != "wedding_ecard_staging":
             raise DatabaseSafetyError("staging requires database wedding_ecard_staging")
     else:
-        raise DatabaseSafetyError("production database access is disabled during Milestone M1")
+        raise DatabaseSafetyError("production database access is disabled before deployment")
 
     identity = DatabaseIdentity(
         environment=environment,

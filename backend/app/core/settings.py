@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Self
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,8 +32,29 @@ class Settings(BaseSettings):
     DATABASE_URL: SecretStr
     APP_NAME: str = "Wedding E-Card API"
     API_V1_PREFIX: str = "/api/v1"
+    JWT_SECRET: SecretStr
+    JWT_ISSUER: str = Field(min_length=1, max_length=128)
+    JWT_AUDIENCE: str = Field(min_length=1, max_length=128)
+    ACCESS_TOKEN_TTL_MINUTES: int = Field(default=30, ge=1, le=60)
     PRIVATE_STORAGE_ROOT: Path = Path("./private-storage")
     IMPORT_EVIDENCE_STORAGE_ROOT: Path = Path("./private-storage/import-evidence")
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, value: SecretStr) -> SecretStr:
+        """Require an explicit high-entropy-sized signing secret."""
+        raw_secret = value.get_secret_value()
+        if "CHANGE_ME" in raw_secret or len(raw_secret.encode("utf-8")) < 32:
+            raise ValueError("JWT_SECRET must be at least 32 bytes and not a placeholder")
+        return value
+
+    @field_validator("JWT_ISSUER", "JWT_AUDIENCE")
+    @classmethod
+    def validate_jwt_identity(cls, value: str) -> str:
+        """Keep token trust identities explicit and unambiguous."""
+        if value != value.strip() or any(character.isspace() for character in value):
+            raise ValueError("JWT issuer and audience must not contain whitespace")
+        return value
 
     @model_validator(mode="after")
     def validate_environment_paths(self) -> Self:

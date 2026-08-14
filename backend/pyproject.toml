@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "alembic>=1.18.5,<2",
+  "argon2-cffi>=25.1,<26",
   "fastapi>=0.141.1,<1",
+  "pyjwt>=2.10,<3",
   "psycopg[binary]>=3.3.4,<4",
   "pydantic-settings>=2.7,<3",
   "sqlalchemy>=2.0.51,<3",
@@ -27,6 +29,7 @@ dev = [
 
 [project.scripts]
 wedding-alembic = "app.cli.safe_alembic:main"
+wedding-bootstrap-admin = "app.cli.bootstrap_admin:main"
 wedding-disposable-alembic = "app.cli.disposable_alembic:main"
 
 [tool.hatch.build.targets.wheel]

@@ -10,11 +10,11 @@ from app.db.base import Base
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_clean_baseline_is_the_only_alembic_head() -> None:
+def test_administrator_authentication_is_the_only_alembic_head() -> None:
     config = Config(BACKEND_ROOT / "alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20260814_0001"]
+    assert script.get_heads() == ["20260814_0002"]
     assert script.get_base() == "20260814_0001"
 
 
@@ -32,5 +32,7 @@ def test_alembic_environment_requires_verified_connection() -> None:
     assert "offline migrations are disabled" in content
 
 
-def test_foundation_declarative_metadata_is_empty() -> None:
-    assert Base.metadata.tables == {}
+def test_declarative_metadata_contains_only_administrator_persistence() -> None:
+    from app.models import Administrator  # noqa: F401
+
+    assert set(Base.metadata.tables) == {"users"}

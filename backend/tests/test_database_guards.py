@@ -15,9 +15,19 @@ from app.db.guards import (
     verify_connected_database,
 )
 
+SYNTHETIC_AUTH_SETTINGS = {
+    "JWT_SECRET": "synthetic-jwt-signing-secret-at-least-32-bytes",
+    "JWT_ISSUER": "synthetic-issuer",
+    "JWT_AUDIENCE": "synthetic-audience",
+}
+
 
 def settings_for(environment: AppEnvironment, database_url: str) -> Settings:
-    values: dict[str, object] = {"APP_ENV": environment, "DATABASE_URL": database_url}
+    values: dict[str, object] = {
+        "APP_ENV": environment,
+        "DATABASE_URL": database_url,
+        **SYNTHETIC_AUTH_SETTINGS,
+    }
     if environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}:
         values.update(
             PRIVATE_STORAGE_ROOT="C:/private",
@@ -86,7 +96,7 @@ def test_schema_mutation_is_disabled_for_staging() -> None:
 
 
 def test_production_database_access_is_disabled() -> None:
-    with pytest.raises(DatabaseSafetyError, match="disabled during Milestone M1"):
+    with pytest.raises(DatabaseSafetyError, match="disabled before deployment"):
         validated_database_url(
             settings_for(
                 AppEnvironment.PRODUCTION,
