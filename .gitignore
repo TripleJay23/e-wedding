@@ -1,0 +1,83 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local databases / dumps / backups
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+backend/backups/
+backups/
+
+# Private user/event data
+private/
+storage/private/
+backend/storage/private/
+uploads/
+backend/uploads/
+*.xlsx
+*.xls
+*.csv
+!assets/sample_excel/*.xlsx
+!assets/sample_excel/*.csv
+
+# Wedding photos and generated artifacts
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+*.zip
+*.pdf
+!docs/**/*.png
+!assets/mockups/**/*.png
+!assets/public/**/*.png
+
+# Template private assets / fonts
+*.ttf
+*.otf
+*.woff
+*.woff2
+*.svg
+!assets/public/**/*.svg
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# Test outputs
+artifacts/
+test-output/
+reports/private/

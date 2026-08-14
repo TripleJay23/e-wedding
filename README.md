@@ -1,0 +1,59 @@
+# Wedding E-Card Backend — Clean Rebuild Foundation
+
+This repository is a clean backend-first rebuild of the wedding e-card and guest validation system.
+
+The rebuild exists to finish the backend with a controlled milestone workflow, preserve the exact approved wedding-card design, eliminate implementation drift, and reach a tested `main` branch before Flutter work begins.
+
+## Core product flow
+
+```text
+Admin login
+  → Create/configure wedding event
+  → Configure guest fields and event policies
+  → Upload Excel guest workbook
+  → Detect structure / map fields / validate rows
+  → Preview valid + invalid rows
+  → Import valid rows
+  → Correct invalid staged rows and revalidate
+  → Issue secure guest QR credentials
+  → Finalize the event card design
+  → Generate permanent personalized cards with real QR codes
+  → Scan at gate
+  → Record attendance and companions
+  → Correct attendance when authorized
+  → Produce reports and exports
+```
+
+## Technology
+
+- Backend: FastAPI / Python
+- Database: PostgreSQL for development, test, staging, and production-like verification
+- ORM/migrations: SQLAlchemy 2 / Alembic
+- Excel: openpyxl or equivalent safe XLSX processing
+- QR: secure random opaque credentials; hashes stored at rest
+- Card rendering: deterministic server-side image renderer driven by validated template manifests
+- Mobile: Flutter, only after backend acceptance is complete
+
+## Git workflow
+
+```text
+feature/* → dev → staging → main
+```
+
+- Feature branches are small and milestone-scoped.
+- `dev` is the integration branch.
+- `staging` is the full end-to-end acceptance branch.
+- `main` is the tested release branch.
+- Agents commit locally only unless the user explicitly authorizes remote operations.
+
+## Start here
+
+1. Read `AGENTS.md`.
+2. Read `docs/ProjectCharter.md`.
+3. Read `docs/Architecture.md`, `docs/Workflow.md`, and `docs/Milestones.md`.
+4. If rebuilding from the frozen legacy project, follow `MASTER_BOOTSTRAP_PROMPT.md` and `docs/LegacyRecovery.md`.
+5. Do not implement a milestone until its predecessor is accepted.
+
+## Important rule
+
+The frozen legacy project is evidence, not the new codebase. Reuse exact approved private template assets/packages and stable contracts where appropriate, but do not blindly copy legacy backend source or migrations.
