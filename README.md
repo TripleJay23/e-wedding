@@ -57,3 +57,38 @@ feature/* → dev → staging → main
 ## Important rule
 
 The frozen legacy project is evidence, not the new codebase. Reuse exact approved private template assets/packages and stable contracts where appropriate, but do not blindly copy legacy backend source or migrations.
+
+## Foundation development
+
+Prerequisites:
+
+- Python 3.12 or 3.13
+- [uv](https://docs.astral.sh/uv/)
+- Docker with Compose for the local PostgreSQL service
+
+Local setup:
+
+1. Copy `.env.example` to the ignored `.env` file and replace every `CHANGE_ME` value.
+2. Start PostgreSQL with `docker compose up -d postgres`.
+3. Run `uv sync --project backend --all-extras --locked`.
+4. Run the guarded baseline migration with
+   `uv run --project backend --env-file .env wedding-alembic upgrade head`.
+5. Start the application factory with
+   `uv run --project backend --env-file .env uvicorn app.main:create_app --factory`.
+
+The current accepted route surface is limited to `GET /api/v1/health`. Domain
+features are added only through later milestones.
+
+Foundation verification:
+
+```text
+uv run --project backend pytest
+uv run --project backend ruff check backend
+uv run --project backend ruff format --check backend
+uv run --project backend python -m compileall -q backend/app backend/tests backend/alembic
+```
+
+Disposable migration commands require `APP_ENV=test`, an explicit local
+PostgreSQL URL, and a uniquely named database beginning with
+`wedding_ecard_disposable_`. Use `python -m app.cli.disposable_alembic`; never
+point a test command at development, staging, or production.

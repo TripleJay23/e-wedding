@@ -1,0 +1,23 @@
+name: wedding-ecard-backend-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wedding_ecard_dev
+      POSTGRES_USER: wedding_app
+      POSTGRES_PASSWORD: ${POSTGRES_DEV_PASSWORD:?Set POSTGRES_DEV_PASSWORD in the ignored .env file}
+    ports:
+      - "127.0.0.1:${POSTGRES_DEV_PORT:-5432}:5432"
+    volumes:
+      - wedding_ecard_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wedding_app -d wedding_ecard_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  wedding_ecard_postgres_data:

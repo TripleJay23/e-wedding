@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wedding-ecard-backend"
+version = "0.1.0"
+description = "Secure wedding e-card and guest validation backend"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "alembic>=1.18.5,<2",
+  "fastapi>=0.141.1,<1",
+  "psycopg[binary]>=3.3.4,<4",
+  "pydantic-settings>=2.7,<3",
+  "sqlalchemy>=2.0.51,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+wedding-alembic = "app.cli.safe_alembic:main"
+wedding-disposable-alembic = "app.cli.disposable_alembic:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", ".uv-cache"]
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "C4", "DTZ", "E", "F", "I", "PIE", "PT", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+known-third-party = ["alembic"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

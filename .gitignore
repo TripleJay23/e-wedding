@@ -14,12 +14,19 @@ backend/.env.*
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.test-tmp/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
+.uv-python/
 .coverage
+coverage.xml
 htmlcov/
 .venv/
 venv/
+*.egg-info/
+build/
+dist/
 
 # Local databases / dumps / backups
 *.db
@@ -32,6 +39,7 @@ backups/
 
 # Private user/event data
 private/
+private-storage/
 storage/private/
 backend/storage/private/
 uploads/
@@ -43,6 +51,7 @@ backend/uploads/
 !assets/sample_excel/*.csv
 
 # Wedding photos and generated artifacts
+generated-cards/
 *.jpg
 *.jpeg
 *.png
