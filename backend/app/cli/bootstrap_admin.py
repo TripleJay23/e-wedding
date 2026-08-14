@@ -13,7 +13,7 @@ from app.db.runtime import DatabaseRuntime
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
 
-AUTHENTICATION_SCHEMA_REVISION = "20260814_0002"
+AUTHENTICATION_SCHEMA_REVISIONS = frozenset({"20260814_0002", "20260814_0003"})
 
 
 class BootstrapSafetyError(RuntimeError):
@@ -62,9 +62,9 @@ def execute(settings: Settings, credentials: AdministratorBootstrapSettings) -> 
             current_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            if current_revision != AUTHENTICATION_SCHEMA_REVISION:
+            if current_revision not in AUTHENTICATION_SCHEMA_REVISIONS:
                 raise BootstrapSafetyError(
-                    "administrator bootstrap requires the current authentication schema revision"
+                    "administrator bootstrap requires a compatible authentication schema revision"
                 )
             print(f"current Alembic revision: {current_revision}")
 

@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from app.core.security import AuthenticationSecurity
 from app.models.administrator import Administrator
 from app.repositories.administrators import AdministratorRepository
+from app.repositories.events import EventRepository
+from app.repositories.guests import GuestRepository
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
+from app.services.events import EventService
 
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="AdministratorBearer")
 
@@ -35,6 +38,13 @@ def get_authentication_service(
         security.passwords,
         security.access_tokens,
     )
+
+
+def get_event_service(
+    session: Annotated[Session, Depends(get_database_session)],
+) -> EventService:
+    """Build one request-scoped M3 service over the shared transaction session."""
+    return EventService(EventRepository(session), GuestRepository(session))
 
 
 def get_current_administrator(

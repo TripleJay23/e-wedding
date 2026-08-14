@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import Connection
 
 from app.db.base import Base
-from app.models import Administrator  # noqa: F401
+from app.models import Administrator, Event, EventGuestField, Guest  # noqa: F401
 
 config = context.config
 

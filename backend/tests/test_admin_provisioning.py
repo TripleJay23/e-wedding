@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.cli.bootstrap_admin import (
+    AUTHENTICATION_SCHEMA_REVISIONS,
     AdministratorBootstrapSettings,
     BootstrapSafetyError,
     execute,
@@ -158,3 +159,7 @@ def test_bootstrap_refuses_non_development_before_database_access(
 def test_non_permitted_role_is_not_a_model_role() -> None:
     assert list(AdministratorRole) == [AdministratorRole.SUPER_ADMIN]
     assert cast(str, AdministratorRole.SUPER_ADMIN) == "SUPER_ADMIN"
+
+
+def test_bootstrap_accepts_only_known_authentication_compatible_revisions() -> None:
+    assert frozenset({"20260814_0002", "20260814_0003"}) == AUTHENTICATION_SCHEMA_REVISIONS

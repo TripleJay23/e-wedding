@@ -1,4 +1,4 @@
-"""FastAPI application factory through M2 administrator authentication."""
+"""FastAPI application factory through M3 events and guest policy."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager

@@ -17,7 +17,7 @@ class FakeDatabaseRuntime:
         self.closed = True
 
 
-def test_health_remains_available_with_m2_route_inventory(development_settings: Settings) -> None:
+def test_health_remains_available_with_m3_route_inventory(development_settings: Settings) -> None:
     runtime = FakeDatabaseRuntime()
     app = create_app(development_settings, database_runtime=runtime)  # type: ignore[arg-type]
 
@@ -41,5 +41,10 @@ def test_health_remains_available_with_m2_route_inventory(development_settings: 
     assert set(app.openapi()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/me",
+        "/api/v1/events",
+        "/api/v1/events/{event_id}",
+        "/api/v1/events/{event_id}/guest-fields",
+        "/api/v1/events/{event_id}/guests",
+        "/api/v1/events/{event_id}/guests/{guest_id}",
         "/api/v1/health",
     }
