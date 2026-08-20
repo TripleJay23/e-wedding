@@ -46,6 +46,8 @@ Use privacy-safe logs and test reports.
 - hash-at-rest
 - constant-time/safe comparison where relevant
 - lifecycle active/inactive/reissue
+- render the credential into a protected private QR image before discarding it
+- metadata-only management API; never expose the raw token, hash, or storage key
 - duplicate attendance protection
 
 ## File storage

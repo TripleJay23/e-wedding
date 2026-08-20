@@ -11,13 +11,16 @@ from app.core.security import AuthenticationSecurity
 from app.imports.storage import ImportEvidenceStorage
 from app.imports.workbook import WorkbookParser
 from app.models.administrator import Administrator
+from app.qr.storage import QrImageStorage
 from app.repositories.administrators import AdministratorRepository
 from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
 from app.repositories.imports import ImportRepository
+from app.repositories.qr import QrCredentialRepository
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
 from app.services.events import EventService
 from app.services.imports import ImportService
+from app.services.qr import QrCredentialService
 
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="AdministratorBearer")
 
@@ -65,6 +68,16 @@ def get_import_service(
         ImportEvidenceStorage(settings.IMPORT_EVIDENCE_STORAGE_ROOT),
         maximum_workbook_bytes=settings.MAX_IMPORT_WORKBOOK_BYTES,
     )
+
+
+def get_qr_credential_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_database_session)],
+) -> QrCredentialService:
+    """Build one request-scoped M5 service over protected QR image storage."""
+    root = request.app.state.settings.QR_IMAGE_STORAGE_ROOT
+    assert root is not None
+    return QrCredentialService(QrCredentialRepository(session), QrImageStorage(root))
 
 
 def get_current_administrator(

@@ -423,7 +423,11 @@ reconcile the control documents:
 3. approve encrypted recoverable bearer-token storage in addition to a hash, which
    would explicitly change the current hash-only-at-rest rule.
 
-No option was selected during this audit.
+No option was selected during this audit. M5 later resolved the boundary by
+rendering the random credential into a protected private QR image during M5
+issuance, persisting only its verifier and internal artifact metadata, then
+discarding the raw credential. M6 consumes the protected image and does not
+recover or persist the raw bearer value.
 
 ### 7.3 Recovery destination and copy authorization
 

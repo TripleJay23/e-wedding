@@ -19,5 +19,6 @@ These decisions prevent repeated rediscovery and drift.
 | Preview QR synthetic/non-resolving | LOCKED |
 | Permanent cards use real secure guest QR credential | LOCKED |
 | Raw QR token never stored; only hash at rest | LOCKED |
+| M5 stores the protected QR image; M6 consumes it without raw-token recovery | LOCKED |
 | Docs fully reconciled after staging acceptance, before main | LOCKED |
 | Old/frozen repository is evidence; new backend code is rebuilt cleanly | LOCKED |

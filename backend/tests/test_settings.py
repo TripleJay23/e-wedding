@@ -55,6 +55,24 @@ def test_import_evidence_root_must_remain_within_private_storage(tmp_path: Path)
         )
 
 
+def test_qr_image_root_defaults_inside_private_storage(development_settings: Settings) -> None:
+    assert development_settings.QR_IMAGE_STORAGE_ROOT == (
+        development_settings.PRIVATE_STORAGE_ROOT / "qr-codes"
+    )
+
+
+def test_qr_image_root_must_remain_within_private_storage(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="QR_IMAGE_STORAGE_ROOT must be within"):
+        Settings(
+            APP_ENV=AppEnvironment.DEVELOPMENT,
+            DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@localhost/wedding_ecard_dev",
+            PRIVATE_STORAGE_ROOT=tmp_path / "private",
+            IMPORT_EVIDENCE_STORAGE_ROOT=tmp_path / "private" / "import-evidence",
+            QR_IMAGE_STORAGE_ROOT=tmp_path / "outside",
+            **SYNTHETIC_AUTH_SETTINGS,
+        )
+
+
 def test_secret_is_masked_in_settings_representation(development_settings: Settings) -> None:
     representation = repr(development_settings)
 

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_TTL_MINUTES: int = Field(default=30, ge=1, le=60)
     PRIVATE_STORAGE_ROOT: Path = Path("./private-storage")
     IMPORT_EVIDENCE_STORAGE_ROOT: Path = Path("./private-storage/import-evidence")
+    QR_IMAGE_STORAGE_ROOT: Path | None = None
     MAX_IMPORT_WORKBOOK_BYTES: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     MAX_IMPORT_CANDIDATE_ROWS: int = Field(default=5_000, ge=1, le=25_000)
 
@@ -64,17 +65,28 @@ class Settings(BaseSettings):
         if self.API_V1_PREFIX != "/api/v1":
             raise ValueError("API_V1_PREFIX must remain /api/v1")
 
+        if self.QR_IMAGE_STORAGE_ROOT is None:
+            self.QR_IMAGE_STORAGE_ROOT = self.PRIVATE_STORAGE_ROOT / "qr-codes"
+
         protected = {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
         if self.APP_ENV in protected:
-            for field_name in ("PRIVATE_STORAGE_ROOT", "IMPORT_EVIDENCE_STORAGE_ROOT"):
+            for field_name in (
+                "PRIVATE_STORAGE_ROOT",
+                "IMPORT_EVIDENCE_STORAGE_ROOT",
+                "QR_IMAGE_STORAGE_ROOT",
+            ):
                 value = getattr(self, field_name)
+                assert isinstance(value, Path)
                 if not value.is_absolute():
                     raise ValueError(f"{field_name} must be absolute in {self.APP_ENV.value}")
 
         private_root = self.PRIVATE_STORAGE_ROOT.resolve()
-        evidence_root = self.IMPORT_EVIDENCE_STORAGE_ROOT.resolve()
-        if evidence_root != private_root and private_root not in evidence_root.parents:
-            raise ValueError("IMPORT_EVIDENCE_STORAGE_ROOT must be within PRIVATE_STORAGE_ROOT")
+        for field_name in ("IMPORT_EVIDENCE_STORAGE_ROOT", "QR_IMAGE_STORAGE_ROOT"):
+            value = getattr(self, field_name)
+            assert isinstance(value, Path)
+            resolved = value.resolve()
+            if resolved != private_root and private_root not in resolved.parents:
+                raise ValueError(f"{field_name} must be within PRIVATE_STORAGE_ROOT")
         return self
 
     @classmethod

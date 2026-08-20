@@ -11,6 +11,7 @@ from app.models.imports import (
     ImportRowRevision,
     ImportRowStatus,
 )
+from app.models.qr import GuestQrCredential, QrCredentialStatus
 
 __all__ = [
     "Administrator",
@@ -20,6 +21,7 @@ __all__ = [
     "EventStatus",
     "Guest",
     "GuestFieldKey",
+    "GuestQrCredential",
     "GuestStatus",
     "ImportBatch",
     "ImportBatchRow",
@@ -27,4 +29,5 @@ __all__ = [
     "ImportRevisionKind",
     "ImportRowRevision",
     "ImportRowStatus",
+    "QrCredentialStatus",
 ]

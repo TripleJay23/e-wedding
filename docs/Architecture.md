@@ -63,6 +63,7 @@ Logical roots:
 ```text
 private/templates/
 private/event-photos/
+private/qr-codes/
 private/generated-cards/
 private/reports/
 private/import-evidence/
@@ -156,13 +157,15 @@ Template-specific asset names, coordinates, colors, fonts, or composition logic 
 For each guest/event credential:
 
 1. generate cryptographically secure opaque token;
-2. return raw token only at issuance/render boundary;
-3. store secure hash at rest;
-4. bind to event and guest;
-5. support active/inactive/reissue lifecycle;
-6. scanning hashes submitted token and looks up the credential safely.
+2. render the QR image while the raw token exists only inside the issuance boundary;
+3. store the protected QR image for M6 and only a secure lookup hash in PostgreSQL;
+4. discard the raw token after successful issuance;
+5. bind credential and image to event and guest;
+6. support active/inactive/reissue lifecycle;
+7. scanning later hashes the submitted token and looks up the credential safely.
 
-QR content contains no guest PII.
+The M5 HTTP API returns metadata only. QR content contains no guest PII, and M6
+uses the protected image without recovering or storing the raw token.
 
 ## 10. Permanent generated-card architecture
 

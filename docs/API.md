@@ -65,11 +65,14 @@ The correction endpoints are required before Excel milestone completion.
 ### QR
 
 - issue
-- retrieve generation representation where authorized
+- retrieve safe credential metadata
 - deactivate
-- reissue
+- activate where lifecycle permits
+- regenerate/reissue
+- bounded event credential metadata list
 
-Never return stored token hashes.
+M5 HTTP responses never return the raw credential, stored token hash, protected
+filesystem/storage key, or unnecessary guest PII.
 
 ### Templates and card design
 
@@ -107,5 +110,5 @@ Permanent generation requires approved design and real QR credential.
 - bounded domain errors
 - no SQL/storage/internal paths
 - no secrets
-- no raw QR hashes/tokens except the raw token at narrowly authorized issuance/render boundary
+- no raw QR hashes/tokens; the issuance/render boundary is internal to the M5 service
 - validation errors remain actionable for the administrator

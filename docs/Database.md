@@ -106,11 +106,13 @@ Original imported row snapshot remains auditable.
 - event_id
 - guest_id
 - token_hash
-- active state
-- issuance/reissue metadata
+- protected QR image storage key and image digest
+- active / inactive / superseded state
+- issuance/reissue metadata and lifecycle timestamps
 - timestamps
 
-Raw token is not stored.
+Raw token is not stored. The storage key and token hash are internal and are not
+part of the HTTP response contract.
 
 ### template_presets / template_preset_versions
 

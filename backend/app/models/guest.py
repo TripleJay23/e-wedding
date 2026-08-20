@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     SmallInteger,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -48,6 +49,7 @@ class Guest(Base):
             "status IN ('ACTIVE', 'INACTIVE')",
             name="ck_guests_status",
         ),
+        UniqueConstraint("id", "event_id", name="uq_guests_id_event"),
         Index("ix_guests_event_full_name_id", "event_id", "full_name", "id"),
     )
 

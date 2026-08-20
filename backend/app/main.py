@@ -1,4 +1,4 @@
-"""FastAPI application factory through complete M4 Excel import."""
+"""FastAPI application factory through M5 secure QR credentials."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
