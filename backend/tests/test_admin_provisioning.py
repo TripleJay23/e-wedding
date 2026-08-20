@@ -163,6 +163,14 @@ def test_non_permitted_role_is_not_a_model_role() -> None:
 
 def test_bootstrap_accepts_only_known_authentication_compatible_revisions() -> None:
     assert (
-        frozenset({"20260814_0002", "20260814_0003", "20260820_0004", "20260820_0005"})
+        frozenset(
+            {
+                "20260814_0002",
+                "20260814_0003",
+                "20260820_0004",
+                "20260820_0005",
+                "20260820_0006",
+            }
+        )
         == AUTHENTICATION_SCHEMA_REVISIONS
     )

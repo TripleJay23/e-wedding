@@ -70,6 +70,12 @@ class GuestQrCredential(Base):
         UniqueConstraint("token_hash", name="uq_guest_qr_credentials_token_hash"),
         UniqueConstraint("image_storage_key", name="uq_guest_qr_credentials_storage_key"),
         UniqueConstraint("replaces_credential_id", name="uq_guest_qr_credentials_replacement"),
+        UniqueConstraint(
+            "id",
+            "event_id",
+            "guest_id",
+            name="uq_guest_qr_credentials_id_event_guest",
+        ),
         Index(
             "ix_guest_qr_credentials_guest_issued_id",
             "guest_id",

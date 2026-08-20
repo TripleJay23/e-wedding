@@ -7,17 +7,22 @@ from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.cards.package import VerifiedTemplateStorage
+from app.cards.renderer import ManifestRenderer
+from app.cards.storage import EventPhotoStorage, GeneratedCardStorage
 from app.core.security import AuthenticationSecurity
 from app.imports.storage import ImportEvidenceStorage
 from app.imports.workbook import WorkbookParser
 from app.models.administrator import Administrator
 from app.qr.storage import QrImageStorage
 from app.repositories.administrators import AdministratorRepository
+from app.repositories.cards import CardRepository
 from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
 from app.repositories.imports import ImportRepository
 from app.repositories.qr import QrCredentialRepository
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
+from app.services.cards import CardService
 from app.services.events import EventService
 from app.services.imports import ImportService
 from app.services.qr import QrCredentialService
@@ -78,6 +83,35 @@ def get_qr_credential_service(
     root = request.app.state.settings.QR_IMAGE_STORAGE_ROOT
     assert root is not None
     return QrCredentialService(QrCredentialRepository(session), QrImageStorage(root))
+
+
+def get_card_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_database_session)],
+) -> CardService:
+    """Build one request-scoped M6 service over protected private roots."""
+    settings = request.app.state.settings
+    template_root = settings.TEMPLATE_STORAGE_ROOT
+    photo_root = settings.EVENT_PHOTO_STORAGE_ROOT
+    generated_root = settings.GENERATED_CARD_STORAGE_ROOT
+    qr_root = settings.QR_IMAGE_STORAGE_ROOT
+    assert template_root is not None
+    assert photo_root is not None
+    assert generated_root is not None
+    assert qr_root is not None
+    qr_service = QrCredentialService(
+        QrCredentialRepository(session),
+        QrImageStorage(qr_root),
+    )
+    return CardService(
+        CardRepository(session),
+        VerifiedTemplateStorage(template_root),
+        EventPhotoStorage(photo_root),
+        GeneratedCardStorage(generated_root),
+        qr_service,
+        ManifestRenderer(),
+        maximum_event_photo_bytes=settings.MAX_EVENT_PHOTO_UPLOAD_BYTES,
+    )
 
 
 def get_current_administrator(

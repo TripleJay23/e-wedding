@@ -14,7 +14,13 @@ from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
 
 AUTHENTICATION_SCHEMA_REVISIONS = frozenset(
-    {"20260814_0002", "20260814_0003", "20260820_0004", "20260820_0005"}
+    {
+        "20260814_0002",
+        "20260814_0003",
+        "20260820_0004",
+        "20260820_0005",
+        "20260820_0006",
+    }
 )
 
 

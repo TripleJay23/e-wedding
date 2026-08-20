@@ -76,11 +76,12 @@ Local setup:
 5. Start the application factory with
    `uv run --project backend --env-file .env uvicorn app.main:create_app --factory`.
 
-The current M5 route surface includes health and authentication plus protected
+The current M6 route surface includes health and authentication plus protected
 event CRUD/lifecycle, event guest-field configuration, manual guest foundation,
 bounded Excel import workflow endpoints, and metadata-only guest QR credential
-issuance/lifecycle endpoints. Card generation, gate validation, attendance, and
-reporting features remain intentionally absent.
+issuance/lifecycle endpoints, exact Wedding Floral V10 design/photo workflows, and
+private permanent-card generation/download/export. Gate validation, attendance,
+and reporting features remain intentionally absent.
 
 After applying the M2 migration, provision the one local development
 administrator with `ADMIN_BOOTSTRAP_USERNAME` and `ADMIN_BOOTSTRAP_PASSWORD`
@@ -92,7 +93,7 @@ uv run --project backend --env-file .env wedding-bootstrap-admin
 
 The command is development-only, refuses to overwrite an existing account,
 and requires a known authentication-compatible schema revision (currently M2,
-M3, M4, or M5). Remove the bootstrap password from the local environment after
+M3, M4, M5, or M6). Remove the bootstrap password from the local environment after
 provisioning succeeds.
 
 Foundation verification:

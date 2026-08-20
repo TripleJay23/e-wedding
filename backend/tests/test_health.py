@@ -17,7 +17,7 @@ class FakeDatabaseRuntime:
         self.closed = True
 
 
-def test_health_remains_available_with_m5_route_inventory(development_settings: Settings) -> None:
+def test_health_remains_available_with_m6_route_inventory(development_settings: Settings) -> None:
     runtime = FakeDatabaseRuntime()
     app = create_app(development_settings, database_runtime=runtime)  # type: ignore[arg-type]
 
@@ -44,6 +44,17 @@ def test_health_remains_available_with_m5_route_inventory(development_settings: 
         "/api/v1/events",
         "/api/v1/events/{event_id}",
         "/api/v1/events/{event_id}/guest-fields",
+        "/api/v1/events/{event_id}/card-design",
+        "/api/v1/events/{event_id}/card-design/approvals/{approval_id}/revoke",
+        "/api/v1/events/{event_id}/card-design/preview",
+        "/api/v1/events/{event_id}/card-design/revisions",
+        "/api/v1/events/{event_id}/card-design/revisions/{revision_id}/approve",
+        "/api/v1/events/{event_id}/cards",
+        "/api/v1/events/{event_id}/cards/export",
+        "/api/v1/events/{event_id}/cards/generate",
+        "/api/v1/events/{event_id}/cards/guests/{guest_id}",
+        "/api/v1/events/{event_id}/cards/{card_id}",
+        "/api/v1/events/{event_id}/cards/{card_id}/content",
         "/api/v1/events/{event_id}/guests",
         "/api/v1/events/{event_id}/guests/{guest_id}",
         "/api/v1/events/{event_id}/imports",
@@ -55,9 +66,16 @@ def test_health_remains_available_with_m5_route_inventory(development_settings: 
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}",
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}/revalidate",
         "/api/v1/events/{event_id}/qr-codes",
+        "/api/v1/events/{event_id}/photos",
+        "/api/v1/events/{event_id}/photos/{photo_id}/content",
+        "/api/v1/events/{event_id}/photos/{photo_id}/select",
         "/api/v1/guests/{guest_id}/qr-code",
         "/api/v1/guests/{guest_id}/qr-code/activate",
         "/api/v1/guests/{guest_id}/qr-code/deactivate",
         "/api/v1/guests/{guest_id}/qr-code/regenerate",
         "/api/v1/health",
+        "/api/v1/templates",
+        "/api/v1/templates/wedding_floral/versions/10/approved-preview",
+        "/api/v1/templates/wedding_floral/versions/10/register",
+        "/api/v1/templates/{template_key}/versions/{template_version}",
     }

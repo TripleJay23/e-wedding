@@ -1,4 +1,4 @@
-"""FastAPI application factory through M5 secure QR credentials."""
+"""FastAPI application factory through M6 permanent guest card generation."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager

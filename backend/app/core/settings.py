@@ -39,8 +39,16 @@ class Settings(BaseSettings):
     PRIVATE_STORAGE_ROOT: Path = Path("./private-storage")
     IMPORT_EVIDENCE_STORAGE_ROOT: Path = Path("./private-storage/import-evidence")
     QR_IMAGE_STORAGE_ROOT: Path | None = None
+    TEMPLATE_STORAGE_ROOT: Path | None = None
+    EVENT_PHOTO_STORAGE_ROOT: Path | None = None
+    GENERATED_CARD_STORAGE_ROOT: Path | None = None
     MAX_IMPORT_WORKBOOK_BYTES: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     MAX_IMPORT_CANDIDATE_ROWS: int = Field(default=5_000, ge=1, le=25_000)
+    MAX_EVENT_PHOTO_UPLOAD_BYTES: int = Field(
+        default=15 * 1024 * 1024,
+        ge=1024,
+        le=50 * 1024 * 1024,
+    )
 
     @field_validator("JWT_SECRET")
     @classmethod
@@ -67,6 +75,12 @@ class Settings(BaseSettings):
 
         if self.QR_IMAGE_STORAGE_ROOT is None:
             self.QR_IMAGE_STORAGE_ROOT = self.PRIVATE_STORAGE_ROOT / "qr-codes"
+        if self.TEMPLATE_STORAGE_ROOT is None:
+            self.TEMPLATE_STORAGE_ROOT = self.PRIVATE_STORAGE_ROOT / "templates"
+        if self.EVENT_PHOTO_STORAGE_ROOT is None:
+            self.EVENT_PHOTO_STORAGE_ROOT = self.PRIVATE_STORAGE_ROOT / "event-photos"
+        if self.GENERATED_CARD_STORAGE_ROOT is None:
+            self.GENERATED_CARD_STORAGE_ROOT = self.PRIVATE_STORAGE_ROOT / "generated-cards"
 
         protected = {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}
         if self.APP_ENV in protected:
@@ -74,6 +88,9 @@ class Settings(BaseSettings):
                 "PRIVATE_STORAGE_ROOT",
                 "IMPORT_EVIDENCE_STORAGE_ROOT",
                 "QR_IMAGE_STORAGE_ROOT",
+                "TEMPLATE_STORAGE_ROOT",
+                "EVENT_PHOTO_STORAGE_ROOT",
+                "GENERATED_CARD_STORAGE_ROOT",
             ):
                 value = getattr(self, field_name)
                 assert isinstance(value, Path)
@@ -81,7 +98,13 @@ class Settings(BaseSettings):
                     raise ValueError(f"{field_name} must be absolute in {self.APP_ENV.value}")
 
         private_root = self.PRIVATE_STORAGE_ROOT.resolve()
-        for field_name in ("IMPORT_EVIDENCE_STORAGE_ROOT", "QR_IMAGE_STORAGE_ROOT"):
+        for field_name in (
+            "IMPORT_EVIDENCE_STORAGE_ROOT",
+            "QR_IMAGE_STORAGE_ROOT",
+            "TEMPLATE_STORAGE_ROOT",
+            "EVENT_PHOTO_STORAGE_ROOT",
+            "GENERATED_CARD_STORAGE_ROOT",
+        ):
             value = getattr(self, field_name)
             assert isinstance(value, Path)
             resolved = value.resolve()

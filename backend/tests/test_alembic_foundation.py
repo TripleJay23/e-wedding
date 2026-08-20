@@ -10,11 +10,11 @@ from app.db.base import Base
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_secure_qr_credentials_is_the_only_alembic_head() -> None:
+def test_permanent_card_generation_is_the_only_alembic_head() -> None:
     config = Config(BACKEND_ROOT / "alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20260820_0005"]
+    assert script.get_heads() == ["20260820_0006"]
     assert script.get_base() == "20260814_0001"
 
 
@@ -32,16 +32,23 @@ def test_alembic_environment_requires_verified_connection() -> None:
     assert "offline migrations are disabled" in content
 
 
-def test_declarative_metadata_contains_m5_persistence() -> None:
+def test_declarative_metadata_contains_m6_persistence() -> None:
     from app.models import (  # noqa: F401
         Administrator,
         Event,
+        EventCardDesign,
+        EventCardDesignApproval,
+        EventCardDesignRevision,
         EventGuestField,
+        EventPhoto,
+        GeneratedGuestCard,
         Guest,
         GuestQrCredential,
         ImportBatch,
         ImportBatchRow,
         ImportRowRevision,
+        TemplatePreset,
+        TemplatePresetVersion,
     )
 
     assert set(Base.metadata.tables) == {
@@ -53,4 +60,11 @@ def test_declarative_metadata_contains_m5_persistence() -> None:
         "import_batch_rows",
         "import_row_revisions",
         "guest_qr_credentials",
+        "template_presets",
+        "template_preset_versions",
+        "event_photos",
+        "event_card_designs",
+        "event_card_design_revisions",
+        "event_card_design_approvals",
+        "generated_guest_cards",
     }
