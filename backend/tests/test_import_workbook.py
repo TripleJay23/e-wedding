@@ -1,0 +1,359 @@
+"""Synthetic-only M4 XLSX security, structure, normalization, and validation tests."""
+
+from __future__ import annotations
+
+from io import BytesIO
+from time import perf_counter
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import pytest
+from openpyxl import Workbook
+
+from app.imports.workbook import WorkbookParser, WorkbookRejectedError
+from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION
+from app.services.guest_validation import GuestFieldPolicy
+
+
+def default_policies() -> list[GuestFieldPolicy]:
+    return [
+        GuestFieldPolicy(field_key, enabled, required)
+        for field_key, enabled, required in DEFAULT_GUEST_FIELD_CONFIGURATION
+    ]
+
+
+def save_workbook(workbook: Workbook) -> bytes:
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def simple_workbook(rows: list[list[object]]) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    for row in rows:
+        worksheet.append(row)
+    return save_workbook(workbook)
+
+
+def parse(content: bytes, *, policies: list[GuestFieldPolicy] | None = None):
+    return WorkbookParser(maximum_candidate_rows=5_000).parse(
+        content,
+        policies or default_policies(),
+        2,
+    )
+
+
+def error_codes(parsed_row) -> set[str]:
+    return {item["code"] for item in parsed_row.validation_errors}
+
+
+def test_reordered_extra_columns_and_human_formatting_are_understood() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Guest List"
+    worksheet.merge_cells("A1:H1")
+    worksheet["A1"] = "Synthetic Wedding Guest Register"
+    worksheet.merge_cells("A2:H2")
+    worksheet["A2"] = "Please complete configured fields"
+    worksheet.append([])
+    worksheet.append(
+        [
+            "Unmanaged Notes",
+            "Invitation Type",
+            "Email Address",
+            "Guest Name",
+            "Table No.",
+            "Phone",
+            "Category",
+            "Plus Ones",
+        ]
+    )
+    worksheet.append(
+        [
+            "ignored",
+            "Family",
+            "SYNTHETIC.ONE@EXAMPLE.TEST",
+            "Synthetic Guest One",
+            "T-1",
+            "+255 700 000 001",
+            "Friends",
+            2,
+        ]
+    )
+    worksheet.append([])
+    worksheet.merge_cells("A7:H7")
+    worksheet["A7"] = "Synthetic Family Section"
+    worksheet.append(
+        [
+            "Unmanaged Notes",
+            "Invitation Type",
+            "Email Address",
+            "Guest Name",
+            "Table No.",
+            "Phone",
+            "Category",
+            "Plus Ones",
+        ]
+    )
+    worksheet.append(
+        [
+            None,
+            "Individual",
+            None,
+            "Synthetic Guest Two",
+            None,
+            "+255700000002",
+            None,
+            0,
+        ]
+    )
+    worksheet.append(["Total Guests", "=COUNTA(D5:D9)"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Guest List"
+    assert result.header_row_number == 4
+    assert result.column_mapping == {
+        "invitation_type": 2,
+        "email": 3,
+        "full_name": 4,
+        "table_number": 5,
+        "phone_number": 6,
+        "category": 7,
+        "allowed_companions": 8,
+    }
+    assert [row.source_row_number for row in result.rows] == [5, 9]
+    assert result.rows[0].values["email"] == "synthetic.one@example.test"
+    assert result.rows[0].validation_errors == []
+    assert result.rows[1].validation_errors == []
+    assert {item["reason"] for item in result.ignored_rows} >= {
+        "PRESENTATION",
+        "BLANK",
+        "REPEATED_HEADER",
+        "FOOTER",
+    }
+
+
+def test_unknown_only_row_is_preserved_as_invalid_not_discarded() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Unmanaged Notes"],
+                ["Synthetic Valid", "Family", None],
+                [None, None, "This row still represents unresolved workbook data"],
+            ]
+        )
+    )
+
+    assert len(result.rows) == 2
+    assert result.rows[1].source_row_number == 3
+    assert error_codes(result.rows[1]) == {"REQUIRED"}
+
+
+def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Formula Guest", '=UPPER("family")', 0],
+                ["Total Guests", "=COUNTA(A2:A2)", None],
+            ]
+        )
+    )
+
+    assert len(result.rows) == 1
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[0])
+    assert any(
+        item["row_number"] == 3 and item["reason"] == "FOOTER" for item in result.ignored_rows
+    )
+
+
+@pytest.mark.parametrize("companions", [0, 1, 2])
+def test_companion_values_within_system_and_event_ceiling_are_valid(companions: int) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                [f"Synthetic Guest {companions}", "Family", companions],
+            ]
+        )
+    )
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.parametrize("companions", [-1, 3, 1.5])
+def test_invalid_companion_values_remain_visible(companions: float) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Invalid Companion", "Family", companions],
+            ]
+        )
+    )
+    assert error_codes(result.rows[0]) & {
+        "INVALID_COMPANION_COUNT",
+        "COMPANION_LIMIT_EXCEEDED",
+    }
+
+
+def test_invalid_phone_email_invitation_and_lossy_numeric_text_are_actionable() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Phone", "Email"],
+                ["Synthetic Phone", "Family", "12-3", None],
+                ["Synthetic Email", "Family", "+255700000010", "not-an-email"],
+                ["Synthetic Type", "X" * 65, "+255700000011", None],
+                ["Synthetic Numeric Phone", "Family", 255700000012, None],
+            ]
+        )
+    )
+
+    assert "INVALID_PHONE" in error_codes(result.rows[0])
+    assert "INVALID_EMAIL" in error_codes(result.rows[1])
+    assert "INVALID_INVITATION_TYPE" in error_codes(result.rows[2])
+    assert "LOSSY_VALUE_NOT_ALLOWED" in error_codes(result.rows[3])
+
+
+def test_duplicate_inside_workbook_marks_later_valid_identity() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Email"],
+                ["Synthetic First", "Family", "same@example.test"],
+                ["Synthetic Second", "Individual", "SAME@example.test"],
+            ]
+        )
+    )
+    assert result.rows[0].validation_errors == []
+    assert error_codes(result.rows[1]) == {"DUPLICATE_IN_WORKBOOK"}
+
+
+def test_optional_missing_columns_default_without_becoming_structural_failure() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Name", "Invite Type"],
+                ["Synthetic Minimal", "Individual"],
+            ]
+        )
+    )
+    assert result.rows[0].values["allowed_companions"] == 0
+    assert result.rows[0].values["email"] is None
+    assert result.rows[0].validation_errors == []
+
+
+def test_missing_required_configured_column_fails_closed() -> None:
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(simple_workbook([["Full Name", "Phone"], ["Synthetic", "+255700000001"]]))
+    assert exc_info.value.code == "MISSING_REQUIRED_COLUMNS"
+    assert "invitation_type" in str(exc_info.value)
+
+
+def test_equal_guest_tables_on_two_visible_sheets_are_ambiguous() -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.append(["Full Name", "Invitation Type"])
+    first.append(["Synthetic One", "Family"])
+    second = workbook.create_sheet("Second")
+    second.append(["Full Name", "Invitation Type"])
+    second.append(["Synthetic Two", "Family"])
+
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(save_workbook(workbook))
+    assert exc_info.value.code == "AMBIGUOUS_GUEST_TABLE"
+
+
+def test_hidden_equal_sheet_does_not_make_visible_selection_ambiguous() -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.append(["Full Name", "Invitation Type"])
+    first.append(["Synthetic One", "Family"])
+    hidden = workbook.create_sheet("Hidden")
+    hidden.sheet_state = "hidden"
+    hidden.append(["Full Name", "Invitation Type"])
+    hidden.append(["Synthetic Two", "Family"])
+
+    result = parse(save_workbook(workbook))
+    assert [row.values["full_name"] for row in result.rows] == ["Synthetic One"]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        (b"not a workbook", "UNSUPPORTED_WORKBOOK"),
+        (b"PK malformed", "MALFORMED_WORKBOOK"),
+    ],
+)
+def test_unsupported_and_corrupt_workbooks_fail_safely(
+    content: bytes,
+    expected_code: str,
+) -> None:
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(content)
+    assert exc_info.value.code == expected_code
+
+
+def test_xlsx_path_traversal_entry_is_rejected_before_parser() -> None:
+    stream = BytesIO()
+    with ZipFile(stream, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("_rels/.rels", "<Relationships/>")
+        archive.writestr("xl/workbook.xml", "<workbook/>")
+        archive.writestr("xl/worksheets/sheet1.xml", "<worksheet/>")
+        archive.writestr("../escape.xml", "private")
+
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(stream.getvalue())
+    assert exc_info.value.code == "UNSAFE_XLSX_PACKAGE"
+
+
+def test_corrupt_xlsx_xml_is_converted_to_bounded_rejection() -> None:
+    valid = simple_workbook([["Full Name", "Invitation Type"], ["Synthetic", "Family"]])
+    source = ZipFile(BytesIO(valid))
+    stream = BytesIO()
+    with source, ZipFile(stream, "w", ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            content = source.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                content = b"<worksheet><broken>"
+            target.writestr(item, content)
+
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(stream.getvalue())
+    assert exc_info.value.code == "MALFORMED_WORKBOOK"
+
+
+def test_candidate_limit_is_enforced_after_structure_detection() -> None:
+    content = simple_workbook(
+        [
+            ["Full Name", "Invitation Type"],
+            ["Synthetic One", "Family"],
+            ["Synthetic Two", "Family"],
+        ]
+    )
+    parser = WorkbookParser(maximum_candidate_rows=1)
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parser.parse(content, default_policies(), 2)
+    assert exc_info.value.code == "CANDIDATE_LIMIT_EXCEEDED"
+
+
+def test_one_thousand_row_synthetic_parse_is_bounded() -> None:
+    rows: list[list[object]] = [["Full Name", "Invitation Type", "Phone"]]
+    rows.extend(
+        [f"Synthetic Guest {index}", "Individual", f"+255700{index:06d}"] for index in range(1_000)
+    )
+    content = simple_workbook(rows)
+
+    started = perf_counter()
+    result = parse(content)
+    duration = perf_counter() - started
+
+    assert len(result.rows) == 1_000
+    assert duration < 10

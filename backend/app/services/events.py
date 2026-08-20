@@ -16,6 +16,7 @@ from app.models.event import (
 from app.models.guest import Guest
 from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
+from app.services.guest_validation import GuestFieldPolicy, validate_guest_values
 
 
 class M3ResourceNotFoundError(LookupError):
@@ -250,21 +251,23 @@ class EventService:
         fields: Sequence[EventGuestField],
         event_companion_maximum: int,
     ) -> None:
-        allowed_companions = values.get(GuestFieldKey.ALLOWED_COMPANIONS.value, 0)
-        if not isinstance(allowed_companions, int) or isinstance(allowed_companions, bool):
+        policies = [
+            GuestFieldPolicy(field.field_key, field.enabled, field.required) for field in fields
+        ]
+        errors = validate_guest_values(dict(values), policies, event_companion_maximum)
+        if not errors:
+            return
+        first = errors[0]
+        field_name = first["field"]
+        if first["code"] == "REQUIRED" and field_name is not None:
+            raise M3ConflictError(f"{field_name} is required for this event")
+        if first["code"] == "FIELD_DISABLED" and field_name is not None:
+            raise M3ConflictError(f"{field_name} is disabled for this event")
+        if first["code"] == "INVALID_COMPANION_COUNT":
             raise M3ConflictError("allowed companions must be an integer")
-        if not 0 <= allowed_companions <= event_companion_maximum:
+        if first["code"] == "COMPANION_LIMIT_EXCEEDED":
             raise M3ConflictError("allowed companions must be within the event companion policy")
-
-        for field in fields:
-            value = values.get(field.field_key.value)
-            has_value = value is not None and value != ""
-            if field.required and not has_value:
-                raise M3ConflictError(f"{field.field_key.value} is required for this event")
-            if not field.enabled and has_value:
-                if field.field_key is GuestFieldKey.ALLOWED_COMPANIONS and value == 0:
-                    continue
-                raise M3ConflictError(f"{field.field_key.value} is disabled for this event")
+        raise M3ConflictError(first["message"])
 
     @staticmethod
     def _commit(repository: EventRepository | GuestRepository) -> None:

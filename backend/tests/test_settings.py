@@ -44,6 +44,17 @@ def test_api_prefix_cannot_drift(development_settings: Settings) -> None:
         Settings(**values)
 
 
+def test_import_evidence_root_must_remain_within_private_storage(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="must be within PRIVATE_STORAGE_ROOT"):
+        Settings(
+            APP_ENV=AppEnvironment.DEVELOPMENT,
+            DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@localhost/wedding_ecard_dev",
+            PRIVATE_STORAGE_ROOT=tmp_path / "private",
+            IMPORT_EVIDENCE_STORAGE_ROOT=tmp_path / "outside",
+            **SYNTHETIC_AUTH_SETTINGS,
+        )
+
+
 def test_secret_is_masked_in_settings_representation(development_settings: Settings) -> None:
     representation = repr(development_settings)
 
@@ -52,7 +63,20 @@ def test_secret_is_masked_in_settings_representation(development_settings: Setti
     assert "**********" in representation
 
 
-def test_settings_can_load_only_an_explicit_env_file(tmp_path: Path) -> None:
+def test_settings_can_load_only_an_explicit_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for field_name in (
+        "APP_ENV",
+        "DATABASE_URL",
+        "JWT_SECRET",
+        "JWT_ISSUER",
+        "JWT_AUDIENCE",
+        "PRIVATE_STORAGE_ROOT",
+        "IMPORT_EVIDENCE_STORAGE_ROOT",
+    ):
+        monkeypatch.delenv(field_name, raising=False)
     env_file = tmp_path / "synthetic.env"
     env_file.write_text(
         "APP_ENV=development\n"

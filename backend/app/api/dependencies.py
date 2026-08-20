@@ -8,12 +8,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.security import AuthenticationSecurity
+from app.imports.storage import ImportEvidenceStorage
+from app.imports.workbook import WorkbookParser
 from app.models.administrator import Administrator
 from app.repositories.administrators import AdministratorRepository
 from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
+from app.repositories.imports import ImportRepository
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
 from app.services.events import EventService
+from app.services.imports import ImportService
 
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="AdministratorBearer")
 
@@ -45,6 +49,22 @@ def get_event_service(
 ) -> EventService:
     """Build one request-scoped M3 service over the shared transaction session."""
     return EventService(EventRepository(session), GuestRepository(session))
+
+
+def get_import_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_database_session)],
+) -> ImportService:
+    """Build one request-scoped M4 import service with private storage controls."""
+    settings = request.app.state.settings
+    return ImportService(
+        EventRepository(session),
+        GuestRepository(session),
+        ImportRepository(session),
+        WorkbookParser(maximum_candidate_rows=settings.MAX_IMPORT_CANDIDATE_ROWS),
+        ImportEvidenceStorage(settings.IMPORT_EVIDENCE_STORAGE_ROOT),
+        maximum_workbook_bytes=settings.MAX_IMPORT_WORKBOOK_BYTES,
+    )
 
 
 def get_current_administrator(

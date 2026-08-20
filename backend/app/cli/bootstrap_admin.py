@@ -13,7 +13,7 @@ from app.db.runtime import DatabaseRuntime
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
 
-AUTHENTICATION_SCHEMA_REVISIONS = frozenset({"20260814_0002", "20260814_0003"})
+AUTHENTICATION_SCHEMA_REVISIONS = frozenset({"20260814_0002", "20260814_0003", "20260820_0004"})
 
 
 class BootstrapSafetyError(RuntimeError):

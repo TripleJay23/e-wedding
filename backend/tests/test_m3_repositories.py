@@ -86,6 +86,10 @@ def test_event_repository_uses_bounded_deterministic_index_shapes() -> None:
     assert repository.get(event.id) is event
     assert session.added == [event, field]
 
+    session.execute_result = FakeScalarResult([], scalar=event)
+    assert repository.get_for_update(event.id) is event
+    assert "FOR UPDATE" in str(session.statements[-1])
+
     session.execute_result = FakeScalarResult([event])
     assert repository.list(event_status=None, limit=50, offset=5) == [event]
     unfiltered_sql = str(session.statements[-1])
