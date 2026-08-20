@@ -120,6 +120,29 @@ def _decode_card_qr(content: bytes) -> str:
     return results[0].text
 
 
+def _exact_color_bounds(
+    content: bytes,
+    region: tuple[int, int, int, int],
+    color: tuple[int, int, int],
+) -> tuple[int, int, int, int]:
+    with Image.open(BytesIO(content)) as source:
+        image = source.convert("RGB")
+        pixels = image.load()
+        coordinates = [
+            (x, y)
+            for y in range(region[1], region[3])
+            for x in range(region[0], region[2])
+            if pixels[x, y] == color
+        ]
+    assert coordinates
+    return (
+        min(x for x, _ in coordinates),
+        min(y for _, y in coordinates),
+        max(x for x, _ in coordinates) + 1,
+        max(y for _, y in coordinates) + 1,
+    )
+
+
 async def _exercise_m6_api(
     settings: Settings,
     runtime: DatabaseRuntime,
@@ -146,8 +169,8 @@ async def _exercise_m6_api(
             headers=headers,
             json={
                 "event_name": "Synthetic M6 PostgreSQL Wedding",
-                "bride_name": "Jordan",
-                "groom_name": "Jessica",
+                "bride_name": "Jordan Jeremiah Josephat",
+                "groom_name": "Jessica Rose Example",
                 "event_datetime": "2027-06-12T14:30:00+03:00",
                 "venue": "Synthetic Hall",
                 "address": "123 Synthetic Road",
@@ -259,6 +282,26 @@ async def _exercise_m6_api(
         assert content.status_code == 200
         assert content.headers["cache-control"] == "private, no-store"
         assert b"PREVIEW-QR-DO-NOT-SCAN" not in content.content
+        permanent_payload = _decode_card_qr(content.content)
+        assert len(permanent_payload) == 32
+        heading_bounds = _exact_color_bounds(
+            content.content,
+            (170, 805, 1070, 867),
+            (89, 67, 43),
+        )
+        couple_bounds = _exact_color_bounds(
+            content.content,
+            (130, 800, 1130, 1073),
+            (65, 94, 40),
+        )
+        guest_bounds = _exact_color_bounds(
+            content.content,
+            (220, 1080, 1020, 1134),
+            (65, 94, 40),
+        )
+        assert heading_bounds[3] < couple_bounds[1]
+        assert 875 <= couple_bounds[1] < couple_bounds[3] < 1073
+        assert 1090 <= guest_bounds[1] < guest_bounds[3] <= 1134
 
         listed = await client.get(f"/api/v1/events/{event_id}/cards", headers=headers)
         assert listed.status_code == 200
@@ -397,10 +440,17 @@ def test_m6_schema_api_qr_bridge_constraints_concurrency_and_query_shape(
         assert generated_root is not None
 
         with Session(engine) as session:
+            persisted_event = session.get(Event, event_id)
+            persisted_guest = session.get(Guest, guest_id)
             original_credential = session.get(GuestQrCredential, original_credential_id)
             replacement_credential = session.get(GuestQrCredential, replacement_credential_id)
             original_card = session.get(GeneratedGuestCard, original_card_id)
             replacement_card = session.get(GeneratedGuestCard, replacement_card_id)
+            assert persisted_event is not None
+            assert persisted_guest is not None
+            assert persisted_event.bride_name == "Jordan Jeremiah Josephat"
+            assert persisted_event.groom_name == "Jessica Rose Example"
+            assert persisted_guest.full_name == "Synthetic Permanent Card Guest"
             assert original_credential is not None
             assert replacement_credential is not None
             assert original_card is not None

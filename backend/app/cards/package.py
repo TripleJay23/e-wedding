@@ -16,6 +16,8 @@ from zipfile import BadZipFile, ZipFile
 
 from PIL import Image
 
+from app.cards.name_policy import FIRST_AND_LAST, FIRST_NAME_EACH
+
 TEMPLATE_KEY = "wedding_floral"
 TEMPLATE_VERSION = 10
 RAW_PACKAGE_SHA256 = "b0ec16e8d1b1a715f16c55b14bec100066fc1dc05f90c7c86b239f7ee734c782"
@@ -93,6 +95,12 @@ SUPPORTED_PLACEHOLDERS = frozenset(
         "system.qr_image",
     }
 )
+V10_DISPLAY_NAME_TRANSFORMATIONS: Mapping[str, str] = MappingProxyType(
+    {
+        "event.couple_names": FIRST_NAME_EACH,
+        "guest.full_name": FIRST_AND_LAST,
+    }
+)
 
 
 class TemplatePackageError(ValueError):
@@ -105,6 +113,7 @@ class VerifiedTemplatePackage:
 
     manifest: Mapping[str, Any]
     resources: Mapping[str, bytes]
+    display_name_transformations: Mapping[str, str]
     raw_package_sha256: str = RAW_PACKAGE_SHA256
     logical_package_sha256: str = LOGICAL_PACKAGE_SHA256
     manifest_sha256: str = MANIFEST_SHA256
@@ -197,6 +206,7 @@ def _load_verified_package(
     return VerifiedTemplatePackage(
         manifest=MappingProxyType(manifest),
         resources=MappingProxyType(resources),
+        display_name_transformations=V10_DISPLAY_NAME_TRANSFORMATIONS,
     )
 
 

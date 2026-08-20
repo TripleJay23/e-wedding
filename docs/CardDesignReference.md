@@ -97,7 +97,18 @@ system.card_identifier
 
 Do not expose guest email, phone, notes, internal IDs, raw QR token, or QR hash as template placeholders.
 
-Name presentation must be explicit. Do not parse/guess first names from `full_name`.
+Wedding Floral V10 applies a deterministic display-only naming policy in the
+card presentation layer:
+
+- bride/groom: first non-honorific name token only;
+- guest: first and final non-honorific name tokens, or the single token when
+  only one remains.
+
+The policy normalizes whitespace and ignores the common leading honorifics
+`Mr`, `Mrs`, `Ms`, `Miss`, `Dr`, and `Prof` (case-insensitive, with or without a
+trailing period). It preserves token spelling, casing, hyphens, and apostrophes.
+Persisted event and guest full names remain unchanged; no display-name columns
+are added.
 
 ## Asset recovery hints
 

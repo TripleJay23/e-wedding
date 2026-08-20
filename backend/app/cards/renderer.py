@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from typing import Any
@@ -10,13 +11,29 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
+from app.cards.name_policy import CardNamePolicyError, apply_display_name_transform
 from app.cards.package import TemplatePackageError, VerifiedTemplatePackage
 
-RENDERER_CONTRACT_VERSION = "manifest-v1-pillow-v1"
+RENDERER_CONTRACT_VERSION = "manifest-v1-pillow-v2"
 
 
 class CardRenderError(ValueError):
     """Raised when supplied render inputs violate the verified manifest contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class TextLayout:
+    """Measured single-line text geometry used by rendering and layout tests."""
+
+    layer_id: str
+    text: str
+    font_size: int
+    frame_bounds: tuple[float, float, float, float]
+    ink_bounds: tuple[float, float, float, float]
+    line_box_bounds: tuple[float, float, float, float]
+    baseline_y: float
+    origin_x: float
+    advance_width: float
 
 
 class ManifestRenderer:
@@ -78,6 +95,30 @@ class ManifestRenderer:
         output = BytesIO()
         canvas.save(output, format="PNG", optimize=False, compress_level=9)
         return output.getvalue()
+
+    def measure_text_layouts(
+        self,
+        package: VerifiedTemplatePackage,
+        placeholders: Mapping[str, Any],
+    ) -> Mapping[str, TextLayout]:
+        """Measure every generic text layer without rasterizing a card."""
+        manifest = package.manifest
+        layers = manifest.get("layers")
+        if not isinstance(layers, list):
+            raise CardRenderError("manifest layers are invalid")
+        measured: dict[str, TextLayout] = {}
+        for raw_layer in layers:
+            layer = _object(raw_layer, "layer")
+            if layer.get("type") != "TEXT":
+                continue
+            _, _, _, layout = self._prepare_text(
+                package,
+                manifest,
+                layer,
+                placeholders,
+            )
+            measured[layout.layer_id] = layout
+        return measured
 
     def _static_asset(
         self,
@@ -195,46 +236,62 @@ class ManifestRenderer:
         layer: Mapping[str, Any],
         placeholders: Mapping[str, Any],
     ) -> None:
-        style = _object(layer.get("style"), "text style")
-        fonts = _object(manifest.get("fonts"), "fonts")
-        font_declaration = _object(fonts.get(style.get("font_key")), "font declaration")
-        font_bytes = package.resource(str(font_declaration.get("package_path")))
-        runs = _resolve_text_runs(layer.get("content"), placeholders, str(style.get("color_hex")))
-        combined = "".join(text for text, _ in runs)
-        fitting = _object(layer.get("fitting"), "text fitting")
-        if len(combined) > int(fitting.get("character_limit", 0)):
-            raise CardRenderError("rendered text exceeds the manifest character limit")
-        x, y, width, height = _frame(layer)
-        letter_spacing = float(style.get("letter_spacing", 0.0))
-        font, text_width, text_height, top_offset = _fit_font(
-            font_bytes,
-            combined,
-            frame=(width, height),
-            minimum=int(fitting.get("minimum_font_size")),
-            maximum=int(fitting.get("maximum_font_size")),
-            letter_spacing=letter_spacing,
+        runs, font, letter_spacing, layout = self._prepare_text(
+            package,
+            manifest,
+            layer,
+            placeholders,
         )
-        alignment = style.get("horizontal_alignment")
-        if alignment == "CENTER":
-            draw_x = x + (width - text_width) / 2
-        elif alignment == "LEFT":
-            draw_x = float(x)
-        elif alignment == "RIGHT":
-            draw_x = x + width - text_width
-        else:
-            raise CardRenderError("text horizontal alignment is unsupported")
-        vertical = style.get("vertical_alignment")
-        if vertical != "CENTER":
-            raise CardRenderError("text vertical alignment is unsupported")
-        draw_y = y + (height - text_height) / 2 - top_offset
         draw = ImageDraw.Draw(canvas)
         _draw_runs(
             draw,
             runs,
-            (draw_x, draw_y),
+            (layout.origin_x, layout.baseline_y),
             font=font,
             letter_spacing=letter_spacing,
         )
+
+    def _prepare_text(
+        self,
+        package: VerifiedTemplatePackage,
+        manifest: Mapping[str, Any],
+        layer: Mapping[str, Any],
+        placeholders: Mapping[str, Any],
+    ) -> tuple[
+        list[tuple[str, tuple[int, int, int, int]]],
+        ImageFont.FreeTypeFont,
+        float,
+        TextLayout,
+    ]:
+        style = _object(layer.get("style"), "text style")
+        fonts = _object(manifest.get("fonts"), "fonts")
+        font_declaration = _object(fonts.get(style.get("font_key")), "font declaration")
+        font_bytes = package.resource(str(font_declaration.get("package_path")))
+        runs = _resolve_text_runs(
+            layer.get("content"),
+            placeholders,
+            str(style.get("color_hex")),
+            package.display_name_transformations,
+        )
+        combined = "".join(text for text, _ in runs)
+        fitting = _object(layer.get("fitting"), "text fitting")
+        if len(combined) > int(fitting.get("character_limit", 0)):
+            raise CardRenderError("rendered text exceeds the manifest character limit")
+        letter_spacing = float(style.get("letter_spacing", 0.0))
+        font, layout = _fit_font(
+            font_bytes,
+            combined,
+            layer=layer,
+            minimum=int(fitting.get("minimum_font_size")),
+            maximum=int(fitting.get("maximum_font_size")),
+            configured=int(style.get("font_size")),
+            letter_spacing=letter_spacing,
+            line_height=float(style.get("line_height", 1.0)),
+            horizontal_alignment=str(style.get("horizontal_alignment")),
+        )
+        if style.get("vertical_alignment") != "CENTER":
+            raise CardRenderError("text vertical alignment is unsupported")
+        return runs, font, letter_spacing, layout
 
 
 def _object(value: Any, label: str) -> Mapping[str, Any]:
@@ -385,6 +442,7 @@ def _resolve_text_runs(
     raw_content: Any,
     placeholders: Mapping[str, Any],
     default_color: str,
+    display_name_transformations: Mapping[str, str] | None = None,
 ) -> list[tuple[str, tuple[int, int, int, int]]]:
     if not isinstance(raw_content, list):
         raise CardRenderError("manifest text content is invalid")
@@ -399,6 +457,12 @@ def _resolve_text_runs(
             if key not in placeholders:
                 raise CardRenderError("required template placeholder is missing")
             value = placeholders[key]
+            transform = (display_name_transformations or {}).get(key)
+            if transform is not None:
+                try:
+                    value = apply_display_name_transform(value, transform)
+                except CardNamePolicyError as exc:
+                    raise CardRenderError("display name could not be derived") from exc
             formatters = run.get("formatters", [])
             if not isinstance(formatters, list):
                 raise CardRenderError("manifest text formatters are invalid")
@@ -455,22 +519,102 @@ def _fit_font(
     font_bytes: bytes,
     text: str,
     *,
-    frame: tuple[int, int],
+    layer: Mapping[str, Any],
     minimum: int,
     maximum: int,
+    configured: int,
     letter_spacing: float,
-) -> tuple[ImageFont.FreeTypeFont, float, int, int]:
-    for size in range(maximum, minimum - 1, -1):
+    line_height: float,
+    horizontal_alignment: str,
+) -> tuple[ImageFont.FreeTypeFont, TextLayout]:
+    if minimum <= 0 or maximum < minimum or configured < minimum:
+        raise CardRenderError("manifest text font-size bounds are invalid")
+    if line_height <= 0:
+        raise CardRenderError("manifest text line height is invalid")
+    x, y, frame_width, frame_height = _frame(layer)
+    frame_bounds = (float(x), float(y), float(x + frame_width), float(y + frame_height))
+    for size in range(min(configured, maximum), minimum - 1, -1):
         try:
             font = ImageFont.truetype(BytesIO(font_bytes), size=size)
         except OSError as exc:
             raise CardRenderError("verified template font could not be loaded") from exc
-        bbox = font.getbbox(text or " ")
-        width = _text_width(font, text, letter_spacing)
-        height = bbox[3] - bbox[1]
-        if width <= frame[0] and height <= frame[1]:
-            return font, width, height, bbox[1]
+        ink_left, ink_top, ink_right, ink_bottom = _ink_bbox(font, text, letter_spacing)
+        advance_width = _text_width(font, text, letter_spacing)
+        ink_height = float(ink_bottom - ink_top)
+        line_box_height = ink_height * line_height
+        if horizontal_alignment == "CENTER":
+            origin_x = x + (frame_width - advance_width) / 2
+        elif horizontal_alignment == "LEFT":
+            origin_x = float(x)
+        elif horizontal_alignment == "RIGHT":
+            origin_x = x + frame_width - advance_width
+        else:
+            raise CardRenderError("text horizontal alignment is unsupported")
+
+        ascender_anchor_y = y + (frame_height - ink_height) / 2
+        ascent, _ = font.getmetrics()
+        baseline_y = ascender_anchor_y + ascent
+        ink_bounds = (
+            origin_x + ink_left,
+            baseline_y + ink_top - ascent,
+            origin_x + ink_right,
+            baseline_y + ink_bottom - ascent,
+        )
+        leading = (line_box_height - ink_height) / 2
+        line_box_bounds = (
+            float(x),
+            ink_bounds[1] - leading,
+            float(x + frame_width),
+            ink_bounds[3] + leading,
+        )
+        if (
+            line_box_height <= frame_height
+            and line_box_bounds[1] >= frame_bounds[1]
+            and line_box_bounds[3] <= frame_bounds[3]
+            and ink_bounds[0] >= frame_bounds[0]
+            and ink_bounds[1] >= frame_bounds[1]
+            and ink_bounds[2] <= frame_bounds[2]
+            and ink_bounds[3] <= frame_bounds[3]
+        ):
+            return font, TextLayout(
+                layer_id=str(layer.get("id")),
+                text=text,
+                font_size=size,
+                frame_bounds=frame_bounds,
+                ink_bounds=ink_bounds,
+                line_box_bounds=line_box_bounds,
+                baseline_y=baseline_y,
+                origin_x=origin_x,
+                advance_width=advance_width,
+            )
     raise CardRenderError("rendered text does not fit its approved frame")
+
+
+def _ink_bbox(
+    font: ImageFont.FreeTypeFont,
+    text: str,
+    letter_spacing: float,
+) -> tuple[float, float, float, float]:
+    if not text:
+        return (0.0, 0.0, 0.0, 0.0)
+    if letter_spacing == 0.0:
+        left, top, right, bottom = font.getbbox(text, anchor="la")
+        return (float(left), float(top), float(right), float(bottom))
+    left = float("inf")
+    top = float("inf")
+    right = float("-inf")
+    bottom = float("-inf")
+    position = 0.0
+    for index, character in enumerate(text):
+        char_left, char_top, char_right, char_bottom = font.getbbox(character, anchor="la")
+        left = min(left, position + char_left)
+        top = min(top, float(char_top))
+        right = max(right, position + char_right)
+        bottom = max(bottom, float(char_bottom))
+        position += float(font.getlength(character))
+        if index < len(text) - 1:
+            position += letter_spacing
+    return (left, top, right, bottom)
 
 
 def _text_width(font: ImageFont.FreeTypeFont, text: str, letter_spacing: float) -> float:
@@ -494,13 +638,13 @@ def _draw_runs(
     x, y = position
     if letter_spacing == 0.0:
         for text, color in runs:
-            draw.text((x, y), text, font=font, fill=color)
+            draw.text((x, y), text, font=font, fill=color, anchor="ls")
             x += float(font.getlength(text))
         return
     remaining = sum(len(text) for text, _ in runs)
     for text, color in runs:
         for character in text:
-            draw.text((x, y), character, font=font, fill=color)
+            draw.text((x, y), character, font=font, fill=color, anchor="ls")
             x += float(font.getlength(character))
             remaining -= 1
             if remaining:
