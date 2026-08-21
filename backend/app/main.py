@@ -4,8 +4,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from app import __version__
+from app.api.errors import request_validation_error_handler
 from app.api.router import api_router
 from app.core.security import AuthenticationSecurity
 from app.core.settings import Settings, get_settings
@@ -39,5 +41,6 @@ def create_app(
     application.state.settings = resolved_settings
     application.state.database = runtime
     application.state.authentication_security = security
+    application.add_exception_handler(RequestValidationError, request_validation_error_handler)
     application.include_router(api_router, prefix=resolved_settings.API_V1_PREFIX)
     return application
