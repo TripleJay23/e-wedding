@@ -17,7 +17,7 @@ class FakeDatabaseRuntime:
         self.closed = True
 
 
-def test_health_remains_available_with_m6_route_inventory(development_settings: Settings) -> None:
+def test_health_remains_available_with_m7_route_inventory(development_settings: Settings) -> None:
     runtime = FakeDatabaseRuntime()
     app = create_app(development_settings, database_runtime=runtime)  # type: ignore[arg-type]
 
@@ -41,9 +41,11 @@ def test_health_remains_available_with_m6_route_inventory(development_settings: 
     assert set(app.openapi()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/me",
+        "/api/v1/attendance/scan",
         "/api/v1/events",
         "/api/v1/events/{event_id}",
         "/api/v1/events/{event_id}/guest-fields",
+        "/api/v1/events/{event_id}/attendance",
         "/api/v1/events/{event_id}/card-design",
         "/api/v1/events/{event_id}/card-design/approvals/{approval_id}/revoke",
         "/api/v1/events/{event_id}/card-design/preview",
@@ -66,10 +68,12 @@ def test_health_remains_available_with_m6_route_inventory(development_settings: 
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}",
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}/revalidate",
         "/api/v1/events/{event_id}/qr-codes",
+        "/api/v1/events/{event_id}/scan-attempts",
         "/api/v1/events/{event_id}/photos",
         "/api/v1/events/{event_id}/photos/{photo_id}/content",
         "/api/v1/events/{event_id}/photos/{photo_id}/select",
         "/api/v1/guests/{guest_id}/qr-code",
+        "/api/v1/guests/{guest_id}/attendance",
         "/api/v1/guests/{guest_id}/qr-code/activate",
         "/api/v1/guests/{guest_id}/qr-code/deactivate",
         "/api/v1/guests/{guest_id}/qr-code/regenerate",

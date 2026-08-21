@@ -20,6 +20,7 @@ AUTHENTICATION_SCHEMA_REVISIONS = frozenset(
         "20260820_0004",
         "20260820_0005",
         "20260820_0006",
+        "20260821_0007",
     }
 )
 

@@ -34,5 +34,5 @@ database and `APP_ENV=test`.
 `wedding-bootstrap-admin` is a one-time, development-only command. It reads the
 administrator password from `ADMIN_BOOTSTRAP_PASSWORD`, never prints or
 overwrites it, and should be run only after the guarded migration reaches a
-known authentication-compatible revision (currently M2, M3, M4, M5, or M6). Remove that
+known authentication-compatible revision (currently M2, M3, M4, M5, M6, or M7). Remove that
 password from the ignored local environment after the account is provisioned.

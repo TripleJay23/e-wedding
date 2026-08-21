@@ -1,6 +1,7 @@
 """SQLAlchemy domain models."""
 
 from app.models.administrator import Administrator, AdministratorRole
+from app.models.attendance import GateScanAttempt, GateScanOutcome, GuestAttendanceRecord
 from app.models.cards import (
     DesignApprovalStatus,
     EventCardDesign,
@@ -37,9 +38,12 @@ __all__ = [
     "EventGuestField",
     "EventPhoto",
     "EventStatus",
+    "GateScanAttempt",
+    "GateScanOutcome",
     "GeneratedCardStatus",
     "GeneratedGuestCard",
     "Guest",
+    "GuestAttendanceRecord",
     "GuestFieldKey",
     "GuestQrCredential",
     "GuestStatus",

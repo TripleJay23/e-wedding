@@ -170,6 +170,7 @@ def test_bootstrap_accepts_only_known_authentication_compatible_revisions() -> N
                 "20260820_0004",
                 "20260820_0005",
                 "20260820_0006",
+                "20260821_0007",
             }
         )
         == AUTHENTICATION_SCHEMA_REVISIONS

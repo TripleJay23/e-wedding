@@ -1,4 +1,4 @@
-"""FastAPI application factory through M6 permanent guest card generation."""
+"""FastAPI application factory through M7 gate validation and attendance."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager

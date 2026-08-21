@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.routes.attendance import router as attendance_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.cards import router as cards_router
 from app.api.routes.events import router as events_router
@@ -11,6 +12,7 @@ from app.api.routes.imports import router as imports_router
 from app.api.routes.qr import router as qr_router
 
 api_router = APIRouter()
+api_router.include_router(attendance_router)
 api_router.include_router(auth_router)
 api_router.include_router(cards_router)
 api_router.include_router(events_router)
