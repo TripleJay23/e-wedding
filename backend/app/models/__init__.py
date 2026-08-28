@@ -2,6 +2,13 @@
 
 from app.models.administrator import Administrator, AdministratorRole
 from app.models.attendance import GateScanAttempt, GateScanOutcome, GuestAttendanceRecord
+from app.models.attendance_corrections import (
+    AttendanceCorrectionDecision,
+    AttendanceCorrectionReason,
+    EffectiveAttendanceSource,
+    EffectiveAttendanceStatus,
+    GuestAttendanceCorrection,
+)
 from app.models.cards import (
     DesignApprovalStatus,
     EventCardDesign,
@@ -30,7 +37,11 @@ from app.models.qr import GuestQrCredential, QrCredentialStatus
 __all__ = [
     "Administrator",
     "AdministratorRole",
+    "AttendanceCorrectionDecision",
+    "AttendanceCorrectionReason",
     "DesignApprovalStatus",
+    "EffectiveAttendanceSource",
+    "EffectiveAttendanceStatus",
     "Event",
     "EventCardDesign",
     "EventCardDesignApproval",
@@ -43,6 +54,7 @@ __all__ = [
     "GeneratedCardStatus",
     "GeneratedGuestCard",
     "Guest",
+    "GuestAttendanceCorrection",
     "GuestAttendanceRecord",
     "GuestFieldKey",
     "GuestQrCredential",

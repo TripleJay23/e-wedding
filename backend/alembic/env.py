@@ -12,6 +12,7 @@ from app.models import (  # noqa: F401
     EventGuestField,
     GateScanAttempt,
     Guest,
+    GuestAttendanceCorrection,
     GuestAttendanceRecord,
     GuestQrCredential,
     ImportBatch,

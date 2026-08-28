@@ -17,12 +17,14 @@ from app.models.administrator import Administrator
 from app.qr.storage import QrImageStorage
 from app.repositories.administrators import AdministratorRepository
 from app.repositories.attendance import AttendanceRepository
+from app.repositories.attendance_corrections import AttendanceCorrectionRepository
 from app.repositories.cards import CardRepository
 from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
 from app.repositories.imports import ImportRepository
 from app.repositories.qr import QrCredentialRepository
 from app.services.attendance import AttendanceService
+from app.services.attendance_corrections import AttendanceCorrectionService
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
 from app.services.cards import CardService
 from app.services.events import EventService
@@ -67,6 +69,14 @@ def get_attendance_service(
     """Build one request-scoped M7 service over a single atomic session."""
 
     return AttendanceService(AttendanceRepository(session))
+
+
+def get_attendance_correction_service(
+    session: Annotated[Session, Depends(get_database_session)],
+) -> AttendanceCorrectionService:
+    """Build one request-scoped M8 service over a single atomic session."""
+
+    return AttendanceCorrectionService(AttendanceCorrectionRepository(session))
 
 
 def get_import_service(

@@ -1,4 +1,4 @@
-"""FastAPI application factory through M7 gate validation and attendance."""
+"""FastAPI application factory through M8 attendance corrections."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
