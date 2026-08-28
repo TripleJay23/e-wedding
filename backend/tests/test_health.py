@@ -17,7 +17,7 @@ class FakeDatabaseRuntime:
         self.closed = True
 
 
-def test_health_remains_available_with_m8_route_inventory(development_settings: Settings) -> None:
+def test_health_remains_available_with_m9_route_inventory(development_settings: Settings) -> None:
     runtime = FakeDatabaseRuntime()
     app = create_app(development_settings, database_runtime=runtime)  # type: ignore[arg-type]
 
@@ -73,6 +73,9 @@ def test_health_remains_available_with_m8_route_inventory(development_settings: 
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}",
         "/api/v1/events/{event_id}/imports/{batch_id}/rows/{row_id}/revalidate",
         "/api/v1/events/{event_id}/qr-codes",
+        "/api/v1/events/{event_id}/reports/attendance",
+        "/api/v1/events/{event_id}/reports/export/{output_format}",
+        "/api/v1/events/{event_id}/reports/summary",
         "/api/v1/events/{event_id}/scan-attempts",
         "/api/v1/events/{event_id}/photos",
         "/api/v1/events/{event_id}/photos/{photo_id}/content",

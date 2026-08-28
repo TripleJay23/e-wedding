@@ -23,6 +23,7 @@ from app.repositories.events import EventRepository
 from app.repositories.guests import GuestRepository
 from app.repositories.imports import ImportRepository
 from app.repositories.qr import QrCredentialRepository
+from app.repositories.reports import ReportRepository
 from app.services.attendance import AttendanceService
 from app.services.attendance_corrections import AttendanceCorrectionService
 from app.services.authentication import AuthenticationRejectedError, AuthenticationService
@@ -30,6 +31,7 @@ from app.services.cards import CardService
 from app.services.events import EventService
 from app.services.imports import ImportService
 from app.services.qr import QrCredentialService
+from app.services.reports import ReportService
 
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="AdministratorBearer")
 
@@ -77,6 +79,18 @@ def get_attendance_correction_service(
     """Build one request-scoped M8 service over a single atomic session."""
 
     return AttendanceCorrectionService(AttendanceCorrectionRepository(session))
+
+
+def get_report_service(
+    request: Request,
+    session: Annotated[Session, Depends(get_database_session)],
+) -> ReportService:
+    """Build one request-scoped M9 service over a bounded single-snapshot read."""
+
+    return ReportService(
+        ReportRepository(session),
+        maximum_rows=request.app.state.settings.MAX_REPORT_EXPORT_ROWS,
+    )
 
 
 def get_import_service(

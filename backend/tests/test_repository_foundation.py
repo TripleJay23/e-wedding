@@ -33,7 +33,7 @@ def test_private_and_generated_artifacts_are_ignored() -> None:
         assert required_pattern in content
 
 
-def test_route_modules_are_limited_through_m8() -> None:
+def test_route_modules_are_limited_through_m9() -> None:
     route_files = {path.stem for path in (BACKEND_ROOT / "app" / "api" / "routes").glob("*.py")}
 
     assert route_files == {
@@ -47,4 +47,5 @@ def test_route_modules_are_limited_through_m8() -> None:
         "health",
         "imports",
         "qr",
+        "reports",
     }

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     GENERATED_CARD_STORAGE_ROOT: Path | None = None
     MAX_IMPORT_WORKBOOK_BYTES: int = Field(default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     MAX_IMPORT_CANDIDATE_ROWS: int = Field(default=5_000, ge=1, le=25_000)
+    MAX_REPORT_EXPORT_ROWS: int = Field(default=5_000, ge=1, le=25_000)
     MAX_EVENT_PHOTO_UPLOAD_BYTES: int = Field(
         default=15 * 1024 * 1024,
         ge=1024,

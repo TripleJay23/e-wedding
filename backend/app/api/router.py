@@ -11,6 +11,7 @@ from app.api.routes.guests import router as guests_router
 from app.api.routes.health import router as health_router
 from app.api.routes.imports import router as imports_router
 from app.api.routes.qr import router as qr_router
+from app.api.routes.reports import router as reports_router
 
 api_router = APIRouter()
 api_router.include_router(attendance_corrections_router)
@@ -22,3 +23,4 @@ api_router.include_router(guests_router)
 api_router.include_router(health_router)
 api_router.include_router(imports_router)
 api_router.include_router(qr_router)
+api_router.include_router(reports_router)
