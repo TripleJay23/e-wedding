@@ -36,3 +36,8 @@ administrator password from `ADMIN_BOOTSTRAP_PASSWORD`, never prints or
 overwrites it, and should be run only after the guarded migration reaches a
 known authentication-compatible revision (currently M2, M3, M4, M5, M6, or M7). Remove that
 password from the ignored local environment after the account is provisioned.
+
+The canonical local staging runtime is documented in `../docs/Environment.md`.
+It uses `.env.staging`, `../compose.staging.yaml`, `wedding-staging-alembic`, and
+`wedding-staging-bootstrap-admin`. These dedicated commands do not weaken the
+development-only bootstrap or ordinary staging-mutation refusal.

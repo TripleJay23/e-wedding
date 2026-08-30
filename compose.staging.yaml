@@ -1,0 +1,24 @@
+name: wedding-ecard-backend-staging
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wedding_ecard_staging
+      POSTGRES_USER: wedding_staging_app
+      POSTGRES_PASSWORD: ${POSTGRES_STAGING_PASSWORD:?Set POSTGRES_STAGING_PASSWORD in .env.staging}
+    ports:
+      - "127.0.0.1:${POSTGRES_STAGING_PORT:-55432}:5432"
+    volumes:
+      - wedding_ecard_staging_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wedding_staging_app -d wedding_ecard_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  wedding_ecard_staging_data:
+    name: wedding-ecard-m10-staging-v2-postgres-data

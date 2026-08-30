@@ -105,6 +105,26 @@ uv run --project backend ruff format --check backend
 uv run --project backend python -m compileall -q backend/app backend/tests backend/alembic
 ```
 
+## Local staging runtime
+
+M10 uses a separate persistent PostgreSQL 17 runtime. Copy
+`.env.staging.example` to the ignored `.env.staging`, replace all placeholders,
+and follow [docs/Environment.md](docs/Environment.md). The bounded sequence is:
+
+```text
+docker compose --env-file .env.staging -f compose.staging.yaml up -d postgres
+uv run --project backend --env-file .env.staging wedding-staging-alembic current
+uv run --project backend --env-file .env.staging wedding-staging-alembic upgrade head
+uv run --project backend --env-file .env.staging wedding-staging-alembic check
+uv run --project backend --env-file .env.staging wedding-staging-bootstrap-admin
+uv run --project backend --env-file .env.staging uvicorn app.main:create_app --factory
+```
+
+The staging migration and administrator commands fail closed on any development,
+test, production, remote, wrongly named, or wrongly credentialed database target.
+Normal Compose `stop` preserves the M10 database; never use `down -v` during the
+continuous S1-S13 campaign.
+
 Disposable migration commands require `APP_ENV=test`, an explicit local
 PostgreSQL URL, and a uniquely named database beginning with
 `wedding_ecard_disposable_`. Use `python -m app.cli.disposable_alembic`; never
