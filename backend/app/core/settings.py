@@ -26,6 +26,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="forbid",
+        hide_input_in_errors=True,
     )
 
     APP_ENV: AppEnvironment

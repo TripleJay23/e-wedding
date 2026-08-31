@@ -6,9 +6,10 @@ from collections.abc import Sequence
 
 from alembic import command
 from alembic.runtime.migration import MigrationContext
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.cli.staging_safety import (
     StagingRuntimeSafetyError,
@@ -17,7 +18,12 @@ from app.cli.staging_safety import (
     require_local_staging_database,
     verify_staging_connection,
 )
+from app.core.configuration_errors import (
+    print_configuration_validation_error,
+    print_operator_refusal,
+)
 from app.core.settings import Settings
+from app.db.guards import DatabaseSafetyError
 
 STAGING_MIGRATION_AUTHORIZATION = "APPLY_ACCEPTED_SCHEMA_TO_CANONICAL_STAGING"
 
@@ -25,7 +31,12 @@ STAGING_MIGRATION_AUTHORIZATION = "APPLY_ACCEPTED_SCHEMA_TO_CANONICAL_STAGING"
 class StagingMigrationAuthorizationSettings(BaseSettings):
     """Load the explicit operator acknowledgement without exposing it in output."""
 
-    model_config = SettingsConfigDict(env_file=None, case_sensitive=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_file=None,
+        case_sensitive=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+    )
 
     STAGING_MIGRATION_AUTHORIZATION: SecretStr
 
@@ -105,8 +116,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _validate_arguments(args, parser)
-    authorization = StagingMigrationAuthorizationSettings() if args.command == "upgrade" else None
-    execute(args, Settings(), authorization)
+    try:
+        authorization = (
+            StagingMigrationAuthorizationSettings() if args.command == "upgrade" else None
+        )
+        execute(args, Settings(), authorization)
+    except ValidationError as exc:
+        print_configuration_validation_error(exc)
+        return 2
+    except DatabaseSafetyError as exc:
+        print_operator_refusal(str(exc))
+        return 2
+    except SQLAlchemyError:
+        print_operator_refusal("database operation failed after identity validation")
+        return 2
     return 0
 
 

@@ -34,6 +34,7 @@ def test_read_only_command_rejects_revision() -> None:
 
 def test_disposable_wrapper_rejects_development_environment(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings = Settings(
         APP_ENV=AppEnvironment.DEVELOPMENT,
@@ -42,8 +43,8 @@ def test_disposable_wrapper_rejects_development_environment(
     )
     monkeypatch.setattr(disposable_alembic, "Settings", lambda: settings)
 
-    with pytest.raises(DatabaseSafetyError, match="APP_ENV=test"):
-        disposable_alembic.main(["current"])
+    assert disposable_alembic.main(["current"]) == 2
+    assert "APP_ENV=test" in capsys.readouterr().err
 
 
 def test_execute_refuses_staging_mutation_before_engine_creation(

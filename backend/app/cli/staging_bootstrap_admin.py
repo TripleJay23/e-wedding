@@ -1,6 +1,6 @@
 """One-time no-overwrite SUPER_ADMIN provisioning for canonical local staging."""
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -12,19 +12,33 @@ from app.cli.staging_safety import (
     require_local_staging_database,
     verify_staging_connection,
 )
+from app.core.configuration_errors import (
+    print_configuration_validation_error,
+    print_operator_refusal,
+)
 from app.core.identity import normalize_administrator_username
 from app.core.security import PasswordManager
 from app.core.settings import Settings
+from app.db.guards import DatabaseSafetyError
 from app.db.runtime import DatabaseRuntime
 from app.models.administrator import Administrator
 from app.repositories.administrators import AdministratorRepository
-from app.services.admin_provisioning import AdministratorProvisioningService
+from app.services.admin_provisioning import (
+    AdministratorAlreadyProvisionedError,
+    AdministratorProvisioningConflictError,
+    AdministratorProvisioningService,
+)
 
 
 class StagingAdministratorBootstrapSettings(BaseSettings):
     """Load staging-only credentials from the explicitly selected process environment."""
 
-    model_config = SettingsConfigDict(env_file=None, case_sensitive=True, extra="forbid")
+    model_config = SettingsConfigDict(
+        env_file=None,
+        case_sensitive=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+    )
 
     STAGING_ADMIN_BOOTSTRAP_USERNAME: str = Field(default="admin", min_length=3, max_length=64)
     STAGING_ADMIN_BOOTSTRAP_PASSWORD: SecretStr
@@ -91,7 +105,21 @@ def execute(
 
 def main() -> int:
     """Load environment-only staging settings and provision exactly once."""
-    execute(Settings(), StagingAdministratorBootstrapSettings())
+    try:
+        execute(Settings(), StagingAdministratorBootstrapSettings())
+    except ValidationError as exc:
+        print_configuration_validation_error(exc)
+        return 2
+    except (
+        AdministratorAlreadyProvisionedError,
+        AdministratorProvisioningConflictError,
+        DatabaseSafetyError,
+    ) as exc:
+        print_operator_refusal(str(exc))
+        return 2
+    except SQLAlchemyError:
+        print_operator_refusal("database operation failed after identity validation")
+        return 2
     return 0
 
 

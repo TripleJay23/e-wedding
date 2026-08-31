@@ -5,12 +5,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app import __version__
 from app.api.errors import request_validation_error_handler
 from app.api.router import api_router
+from app.core.configuration_errors import (
+    SafeConfigurationError,
+    format_configuration_validation_error,
+    format_operator_refusal,
+)
 from app.core.security import AuthenticationSecurity
 from app.core.settings import Settings, get_settings
+from app.db.guards import DatabaseSafetyError
 from app.db.runtime import DatabaseRuntime
 
 
@@ -22,8 +29,14 @@ def create_app(
 ) -> FastAPI:
     """Build one application without connecting to PostgreSQL at import time."""
 
-    resolved_settings = settings or get_settings()
-    runtime = database_runtime or DatabaseRuntime(resolved_settings)
+    try:
+        resolved_settings = settings or get_settings()
+    except ValidationError as exc:
+        raise SafeConfigurationError(format_configuration_validation_error(exc)) from None
+    try:
+        runtime = database_runtime or DatabaseRuntime(resolved_settings)
+    except DatabaseSafetyError as exc:
+        raise SafeConfigurationError(format_operator_refusal(str(exc))) from None
     security = authentication_security or AuthenticationSecurity.from_settings(resolved_settings)
 
     @asynccontextmanager

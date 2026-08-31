@@ -1,14 +1,18 @@
 """Development-only one-time administrator provisioning command."""
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.configuration_errors import (
+    print_configuration_validation_error,
+    print_operator_refusal,
+)
 from app.core.identity import normalize_administrator_username
 from app.core.security import PasswordManager
 from app.core.settings import AppEnvironment, Settings
-from app.db.guards import verify_connected_database
+from app.db.guards import DatabaseSafetyError, verify_connected_database
 from app.db.runtime import DatabaseRuntime
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
@@ -36,6 +40,7 @@ class AdministratorBootstrapSettings(BaseSettings):
         env_file=None,
         case_sensitive=True,
         extra="forbid",
+        hide_input_in_errors=True,
     )
 
     ADMIN_BOOTSTRAP_USERNAME: str = Field(default="admin", min_length=3, max_length=64)
@@ -96,7 +101,14 @@ def execute(settings: Settings, credentials: AdministratorBootstrapSettings) -> 
 
 def main() -> int:
     """Load environment-only settings and provision the local administrator."""
-    execute(Settings(), AdministratorBootstrapSettings())
+    try:
+        execute(Settings(), AdministratorBootstrapSettings())
+    except ValidationError as exc:
+        print_configuration_validation_error(exc)
+        return 2
+    except (BootstrapSafetyError, DatabaseSafetyError) as exc:
+        print_operator_refusal(str(exc))
+        return 2
     return 0
 
 

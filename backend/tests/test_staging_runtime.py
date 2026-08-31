@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 from app.cli import staging_alembic, staging_bootstrap_admin
 from app.cli.staging_alembic import (
@@ -128,7 +127,10 @@ def test_staging_commands_refuse_noncanonical_database_identity(
         require_local_staging_database(runtime_settings(tmp_path, database_url=database_url))
 
 
-def test_missing_application_environment_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_application_environment_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     for name in (
         "APP_ENV",
         "DATABASE_URL",
@@ -138,8 +140,10 @@ def test_missing_application_environment_fails_closed(monkeypatch: pytest.Monkey
     ):
         monkeypatch.delenv(name, raising=False)
 
-    with pytest.raises(ValidationError):
-        staging_alembic.main(["current"])
+    assert staging_alembic.main(["current"]) == 2
+    output = capsys.readouterr().err
+    assert "configuration validation failed" in output
+    assert "Traceback" not in output
 
 
 def test_staging_upgrade_requires_explicit_authorization_before_engine_creation(

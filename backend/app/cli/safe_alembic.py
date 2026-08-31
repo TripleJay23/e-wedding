@@ -7,10 +7,16 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from pydantic import ValidationError
 from sqlalchemy import Connection, create_engine
 
+from app.core.configuration_errors import (
+    print_configuration_validation_error,
+    print_operator_refusal,
+)
 from app.core.settings import Settings
 from app.db.guards import (
+    DatabaseSafetyError,
     require_schema_mutation_allowed,
     validated_database_url,
     verify_connected_database,
@@ -81,7 +87,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _validate_arguments(args, parser)
-    execute(args, Settings())
+    try:
+        execute(args, Settings())
+    except ValidationError as exc:
+        print_configuration_validation_error(exc)
+        return 2
+    except DatabaseSafetyError as exc:
+        print_operator_refusal(str(exc))
+        return 2
     return 0
 
 
