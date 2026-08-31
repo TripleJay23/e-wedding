@@ -226,6 +226,7 @@ class WorkbookParser:
         seen_valid_fingerprints: set[str] = set()
         aliases = _enabled_alias_lookup(set(candidate.mapping))
         merged_ranges = tuple(worksheet.merged_cells.ranges)
+        last_populated_row = _last_populated_row(worksheet, candidate.row_number + 1)
         seen_candidate = False
 
         for row_number in range(candidate.row_number + 1, worksheet.max_row + 1):
@@ -237,6 +238,7 @@ class WorkbookParser:
                 aliases=aliases,
                 merged_ranges=merged_ranges,
                 seen_candidate=seen_candidate,
+                is_terminal=row_number == last_populated_row,
             )
             if reason is not None:
                 ignored.append({"row_number": row_number, "reason": reason})
@@ -387,6 +389,7 @@ def _ignored_row_reason(
     aliases: dict[str, GuestFieldKey],
     merged_ranges: tuple[Any, ...],
     seen_candidate: bool,
+    is_terminal: bool,
 ) -> str | None:
     populated = [cell for cell in cells if cell.value is not None and cell.value != ""]
     if not populated:
@@ -412,11 +415,43 @@ def _ignored_row_reason(
     )
     if seen_candidate and first_label in _FOOTER_LABELS and footer_shape:
         return "FOOTER"
+    if seen_candidate and is_terminal and _is_sparse_aggregate_footer(populated, selected_mapping):
+        return "FOOTER"
     return None
 
 
 def _row_is_blank(cells: tuple[Cell, ...]) -> bool:
     return all(cell.value is None or cell.value == "" for cell in cells)
+
+
+def _last_populated_row(worksheet: Worksheet, first_row: int) -> int | None:
+    for row_number in range(worksheet.max_row, first_row - 1, -1):
+        if not _row_is_blank(worksheet[row_number]):
+            return row_number
+    return None
+
+
+def _is_sparse_aggregate_footer(
+    populated: list[Cell],
+    selected_mapping: dict[GuestFieldKey, int],
+) -> bool:
+    """Recognize only a terminal aggregate row with no mapped guest evidence."""
+    if len(populated) > 2:
+        return False
+
+    aggregate_column = selected_mapping.get(GuestFieldKey.ALLOWED_COMPANIONS)
+    if aggregate_column is None:
+        return False
+    aggregate_cells = [cell for cell in populated if cell.column == aggregate_column]
+    if len(aggregate_cells) != 1 or not _cell_is_formula(aggregate_cells[0]):
+        return False
+
+    mapped_guest_columns = set(selected_mapping.values()) - {aggregate_column}
+    return all(cell.column not in mapped_guest_columns for cell in populated)
+
+
+def _cell_is_formula(cell: Cell) -> bool:
+    return cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("="))
 
 
 def _normalize_candidate(
@@ -454,7 +489,7 @@ def _normalize_cell(
     if value is None or value == "":
         default = 0 if field_key is GuestFieldKey.ALLOWED_COMPANIONS else None
         return default, None
-    if cell.data_type == "f" or (isinstance(value, str) and value.startswith("=")):
+    if _cell_is_formula(cell):
         return None, error(
             field_key, "FORMULA_NOT_ALLOWED", "formulas are not allowed in guest rows"
         )
@@ -470,6 +505,17 @@ def _normalize_cell(
             field_key,
             "INVALID_COMPANION_COUNT",
             "allowed companions must be an integer",
+        )
+
+    if field_key is GuestFieldKey.TABLE_NUMBER and isinstance(value, (int, float)):
+        if isinstance(value, int):
+            return str(value), None
+        if math.isfinite(value) and value.is_integer():
+            return str(int(value)), None
+        return None, error(
+            field_key,
+            "LOSSY_VALUE_NOT_ALLOWED",
+            "table number must be losslessly representable as text",
         )
 
     if not isinstance(value, str):

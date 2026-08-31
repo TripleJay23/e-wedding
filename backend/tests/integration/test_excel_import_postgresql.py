@@ -44,12 +44,22 @@ def synthetic_workbook() -> bytes:
     worksheet.merge_cells("A1:E1")
     worksheet["A1"] = "Synthetic PostgreSQL Wedding Guests"
     worksheet.append([])
-    worksheet.append(["Full Name", "Invitation Type", "Email", "Phone", "Allowed Companions"])
-    worksheet.append(["Synthetic Valid One", "Family", "one@example.test", None, 2])
-    worksheet.append(["Synthetic Correctable", None, "correct@example.test", None, 0])
-    worksheet.append(["Synthetic Valid Two", "Individual", None, "+255700000022", 0])
-    worksheet.append(["Synthetic Duplicate", "Family", "ONE@example.test", None, 1])
-    worksheet.append(["Total Guests", "=COUNTA(A4:A7)", None, None, None])
+    worksheet.append(
+        [
+            "Unmanaged Notes",
+            "Full Name",
+            "Invitation Type",
+            "Email",
+            "Phone",
+            "Allowed Companions",
+            "Table Number",
+        ]
+    )
+    worksheet.append([None, "Synthetic Valid One", "Family", "one@example.test", None, 2, 1])
+    worksheet.append([None, "Synthetic Correctable", None, "correct@example.test", None, 0, 2.0])
+    worksheet.append([None, "Synthetic Valid Two", "Individual", None, "+255700000022", 0, "A1"])
+    worksheet.append([None, "Synthetic Duplicate", "Family", "ONE@example.test", None, 1, 12])
+    worksheet.append(["Workbook Aggregate", None, None, None, None, "=COUNTA(B4:B7)", None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -135,6 +145,27 @@ async def exercise_import_api(
         }
         assert "storage_key" not in upload_body
         assert "private" not in upload.text.casefold()
+
+        staged_rows = await client.get(
+            f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=100&offset=0",
+            headers=headers,
+        )
+        assert staged_rows.status_code == 200
+        staged_items = staged_rows.json()["items"]
+        assert [item["current_values"]["table_number"] for item in staged_items] == [
+            "1",
+            "2",
+            "A1",
+            "12",
+        ]
+        assert all(item["original_values"] == item["current_values"] for item in staged_items)
+
+        guests_before_progress = await client.get(
+            f"/api/v1/events/{event_id}/guests?limit=100&offset=0",
+            headers=headers,
+        )
+        assert guests_before_progress.status_code == 200
+        assert guests_before_progress.json()["items"] == []
 
         first_progress = await client.post(
             f"/api/v1/events/{event_id}/imports/{batch_id}/progress",

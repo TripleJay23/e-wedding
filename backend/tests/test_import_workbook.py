@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import date, time
 from io import BytesIO
+from math import inf, nan
 from time import perf_counter
+from types import SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from openpyxl import Workbook
 
-from app.imports.workbook import WorkbookParser, WorkbookRejectedError
-from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION
+from app.imports.workbook import WorkbookParser, WorkbookRejectedError, _normalize_cell
+from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION, GuestFieldKey
 from app.services.guest_validation import GuestFieldPolicy
 
 
@@ -169,6 +172,177 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
     assert any(
         item["row_number"] == 3 and item["reason"] == "FOOTER" for item in result.ignored_rows
     )
+
+
+@pytest.mark.parametrize(
+    ("table_number", "expected"),
+    [
+        (1, "1"),
+        (1.0, "1"),
+        (12, "12"),
+        (12.0, "12"),
+        ("12", "12"),
+        ("A1", "A1"),
+        ("Table 7", "Table 7"),
+    ],
+)
+def test_table_number_losslessly_normalizes_integral_numbers_and_preserves_text(
+    table_number: object,
+    expected: str,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Table Number"],
+                ["Synthetic Table Guest", "Family", table_number],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["table_number"] == expected
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.parametrize("table_number", [12.5, True])
+def test_table_number_rejects_ambiguous_or_unsafe_excel_scalars(table_number: object) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Table Number"],
+                ["Synthetic Unsafe Table", "Family", table_number],
+            ]
+        )
+    )
+
+    assert error_codes(result.rows[0]) & {
+        "LOSSY_VALUE_NOT_ALLOWED",
+        "UNSUPPORTED_VALUE_TYPE",
+    }
+
+
+@pytest.mark.parametrize("table_number", [nan, inf, -inf])
+def test_table_number_rejects_non_finite_numeric_scalars(table_number: float) -> None:
+    synthetic_cell = SimpleNamespace(value=table_number, data_type="n")
+
+    value, field_error = _normalize_cell(GuestFieldKey.TABLE_NUMBER, synthetic_cell)  # type: ignore[arg-type]
+
+    assert value is None
+    assert field_error is not None
+    assert field_error["code"] == "LOSSY_VALUE_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    ("table_number", "expected_code"),
+    [
+        (date(2027, 1, 2), "UNSUPPORTED_VALUE_TYPE"),
+        (time(14, 30), "UNSUPPORTED_VALUE_TYPE"),
+        (complex(12, 1), "LOSSY_VALUE_NOT_ALLOWED"),
+        (object(), "LOSSY_VALUE_NOT_ALLOWED"),
+    ],
+)
+def test_table_number_rejects_date_time_and_unsupported_values(
+    table_number: object,
+    expected_code: str,
+) -> None:
+    synthetic_cell = SimpleNamespace(value=table_number, data_type="n")
+
+    value, field_error = _normalize_cell(GuestFieldKey.TABLE_NUMBER, synthetic_cell)  # type: ignore[arg-type]
+
+    assert value is None
+    assert field_error is not None
+    assert field_error["code"] == expected_code
+
+
+def test_table_number_formula_in_genuine_guest_row_is_rejected() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Table Number"],
+                ["Synthetic Formula Table", "Family", "=SUM(6,6)"],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["table_number"] is None
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[0])
+
+
+def test_numeric_phone_remains_rejected_when_excel_formatting_is_unrecoverable() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Phone Number", "Table Number"],
+                ["Synthetic Numeric Phone", "Family", 255700000012, 12],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["table_number"] == "12"
+    assert result.rows[0].values["phone_number"] is None
+    assert "LOSSY_VALUE_NOT_ALLOWED" in error_codes(result.rows[0])
+
+
+def test_terminal_sparse_aggregate_row_without_guest_identity_is_ignored() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Unmanaged Notes",
+                    "Guest Name",
+                    "Invitation Type",
+                    "Allowed Companions",
+                ],
+                [None, "Synthetic Guest", "Family", 1],
+                ["Workbook Aggregate", None, None, "=SUM(D2:D2)"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert any(
+        item["row_number"] == 3 and item["reason"] == "FOOTER" for item in result.ignored_rows
+    )
+
+
+def test_terminal_obvious_summary_row_remains_structural_without_formula() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Guest Name", "Invitation Type"],
+                [None, "Synthetic Guest", "Family"],
+                ["Total Guests", None, None, 1],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
+
+
+def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Unmanaged Notes",
+                    "Guest Name",
+                    "Invitation Type",
+                    "Allowed Companions",
+                    "Category",
+                ],
+                [None, "Formula Guest", "Family", "=SUM(1,1)", None],
+                [None, "Missing Type Guest", None, 0, None],
+                ["Aggregate Before Guest", None, None, "=SUM(D2:D3)", None],
+                [None, None, None, 0, "Incomplete guest evidence"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4, 5]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[0])
+    assert "REQUIRED" in error_codes(result.rows[1])
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[2])
+    assert "REQUIRED" in error_codes(result.rows[3])
 
 
 @pytest.mark.parametrize("companions", [0, 1, 2])
