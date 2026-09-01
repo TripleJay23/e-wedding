@@ -132,17 +132,13 @@ class ImportRepository:
 
     def valid_staged_fingerprints(
         self,
-        event_id: UUID,
+        batch_id: UUID,
         *,
         exclude_row_id: UUID | None = None,
     ) -> list[list[str]]:
-        statement = (
-            select(ImportBatchRow.identity_fingerprints)
-            .join(ImportBatch, ImportBatch.id == ImportBatchRow.batch_id)
-            .where(
-                ImportBatch.event_id == event_id,
-                ImportBatchRow.status == ImportRowStatus.VALID,
-            )
+        statement = select(ImportBatchRow.identity_fingerprints).where(
+            ImportBatchRow.batch_id == batch_id,
+            ImportBatchRow.status == ImportRowStatus.VALID,
         )
         if exclude_row_id is not None:
             statement = statement.where(ImportBatchRow.id != exclude_row_id)

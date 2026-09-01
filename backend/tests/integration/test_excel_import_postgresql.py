@@ -66,6 +66,41 @@ def synthetic_workbook() -> bytes:
     return stream.getvalue()
 
 
+def partial_retry_workbook(*, corrected: bool) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Synthetic Partial Retry"
+    worksheet.append(["Full Name", "Invitation Type", "Email", "Allowed Companions"])
+    worksheet.append(["Synthetic Persisted", "Family", "persisted@example.test", 1])
+    worksheet.append(
+        [
+            "Synthetic Preview Only",
+            "Individual" if corrected else None,
+            "preview-only@example.test",
+            0,
+        ]
+    )
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def concurrent_retry_workbook() -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Synthetic Concurrent Retry"
+    worksheet.append(["Full Name", "Invitation Type", "Email", "Allowed Companions"])
+    worksheet.append(["Synthetic Concurrent One", "Family", "concurrent-one@example.test", 2])
+    worksheet.append(["Synthetic Concurrent Two", "Individual", "concurrent-two@example.test", 0])
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
 def configure_test_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -161,6 +196,61 @@ async def exercise_import_api(
         ]
         assert all(item["original_values"] == item["current_values"] for item in staged_items)
 
+        first_preview_snapshot = [
+            {
+                "id": item["id"],
+                "status": item["status"],
+                "original_values": item["original_values"],
+                "validation_errors": item["validation_errors"],
+            }
+            for item in staged_items
+        ]
+        retry_batch_ids: list[str] = []
+        for retry_number in (2, 3):
+            retry = await client.post(
+                f"/api/v1/events/{event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        f"synthetic-retry-{retry_number}.xlsx",
+                        synthetic_workbook(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert retry.status_code == 201, retry.text
+            retry_body = retry.json()
+            retry_batch_ids.append(retry_body["id"])
+            assert retry_body["reconciliation"] == reconciliation
+            retry_rows = await client.get(
+                f"/api/v1/events/{event_id}/imports/{retry_body['id']}/rows?limit=100&offset=0",
+                headers=headers,
+            )
+            assert retry_rows.status_code == 200
+            retry_items = retry_rows.json()["items"]
+            duplicate_codes = [
+                error_item["code"]
+                for item in retry_items
+                for error_item in item["validation_errors"]
+                if error_item["code"].startswith("DUPLICATE")
+            ]
+            assert duplicate_codes == ["DUPLICATE_IN_WORKBOOK"]
+
+        unchanged_first_preview = await client.get(
+            f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=100&offset=0",
+            headers=headers,
+        )
+        assert unchanged_first_preview.status_code == 200
+        assert [
+            {
+                "id": item["id"],
+                "status": item["status"],
+                "original_values": item["original_values"],
+                "validation_errors": item["validation_errors"],
+            }
+            for item in unchanged_first_preview.json()["items"]
+        ] == first_preview_snapshot
+
         guests_before_progress = await client.get(
             f"/api/v1/events/{event_id}/guests?limit=100&offset=0",
             headers=headers,
@@ -237,6 +327,139 @@ async def exercise_import_api(
         assert reupload.status_code == 201, reupload.text
         assert reupload.json()["reconciliation"]["duplicates"] == 3
         assert reupload.json()["reconciliation"]["currently_invalid_staged_rows"] == 1
+
+        partial_event = await client.post(
+            "/api/v1/events",
+            headers=headers,
+            json={**event_payload, "event_name": "Synthetic Partial Retry Wedding"},
+        )
+        assert partial_event.status_code == 201
+        partial_event_id = partial_event.json()["id"]
+        partial_preview = await client.post(
+            f"/api/v1/events/{partial_event_id}/imports",
+            headers=headers,
+            files={
+                "workbook": (
+                    "synthetic-partial.xlsx",
+                    partial_retry_workbook(corrected=False),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert partial_preview.status_code == 201, partial_preview.text
+        partial_batch_id = partial_preview.json()["id"]
+        assert partial_preview.json()["reconciliation"]["currently_valid_staged_rows"] == 1
+        assert partial_preview.json()["reconciliation"]["currently_invalid_staged_rows"] == 1
+        partial_progress = await client.post(
+            f"/api/v1/events/{partial_event_id}/imports/{partial_batch_id}/progress",
+            headers=headers,
+        )
+        assert partial_progress.status_code == 200, partial_progress.text
+        assert partial_progress.json()["imported_rows"] == 1
+
+        partial_retry = await client.post(
+            f"/api/v1/events/{partial_event_id}/imports",
+            headers=headers,
+            files={
+                "workbook": (
+                    "synthetic-partial-retry.xlsx",
+                    partial_retry_workbook(corrected=True),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert partial_retry.status_code == 201, partial_retry.text
+        partial_retry_reconciliation = partial_retry.json()["reconciliation"]
+        assert partial_retry_reconciliation["currently_valid_staged_rows"] == 1
+        assert partial_retry_reconciliation["currently_invalid_staged_rows"] == 0
+        assert partial_retry_reconciliation["duplicates"] == 1
+        partial_retry_rows = await client.get(
+            f"/api/v1/events/{partial_event_id}/imports/{partial_retry.json()['id']}/rows",
+            headers=headers,
+        )
+        assert partial_retry_rows.status_code == 200
+        partial_retry_items = partial_retry_rows.json()["items"]
+        assert [item["status"] for item in partial_retry_items] == ["DUPLICATE", "VALID"]
+        assert partial_retry_items[0]["validation_errors"][0]["code"] == (
+            "DUPLICATE_EXISTING_GUEST"
+        )
+        assert partial_retry_items[1]["validation_errors"] == []
+        partial_historical_rows = await client.get(
+            f"/api/v1/events/{partial_event_id}/imports/{partial_batch_id}/rows",
+            headers=headers,
+        )
+        assert partial_historical_rows.status_code == 200
+        assert [item["status"] for item in partial_historical_rows.json()["items"]] == [
+            "IMPORTED",
+            "INVALID",
+        ]
+        partial_guests = await client.get(
+            f"/api/v1/events/{partial_event_id}/guests?limit=100&offset=0",
+            headers=headers,
+        )
+        assert partial_guests.status_code == 200
+        assert len(partial_guests.json()["items"]) == 1
+
+        concurrent_event = await client.post(
+            "/api/v1/events",
+            headers=headers,
+            json={**event_payload, "event_name": "Synthetic Concurrent Retry Wedding"},
+        )
+        assert concurrent_event.status_code == 201
+        concurrent_event_id = concurrent_event.json()["id"]
+        concurrent_batch_ids: list[str] = []
+        for upload_number in (1, 2, 3):
+            concurrent_preview = await client.post(
+                f"/api/v1/events/{concurrent_event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        f"synthetic-concurrent-{upload_number}.xlsx",
+                        concurrent_retry_workbook(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert concurrent_preview.status_code == 201, concurrent_preview.text
+            concurrent_reconciliation = concurrent_preview.json()["reconciliation"]
+            assert concurrent_reconciliation["currently_valid_staged_rows"] == 2
+            assert concurrent_reconciliation["duplicates"] == 0
+            concurrent_batch_ids.append(concurrent_preview.json()["id"])
+
+        concurrent_guests_before_progress = await client.get(
+            f"/api/v1/events/{concurrent_event_id}/guests?limit=100&offset=0",
+            headers=headers,
+        )
+        assert concurrent_guests_before_progress.status_code == 200
+        assert concurrent_guests_before_progress.json()["items"] == []
+
+        concurrent_results = await asyncio.gather(
+            *(
+                client.post(
+                    f"/api/v1/events/{concurrent_event_id}/imports/{concurrent_batch_id}/progress",
+                    headers=headers,
+                )
+                for concurrent_batch_id in concurrent_batch_ids[:2]
+            )
+        )
+        assert all(result.status_code == 200 for result in concurrent_results)
+        assert sum(result.json()["imported_rows"] for result in concurrent_results) == 2
+        assert sum(result.json()["duplicate_rows"] for result in concurrent_results) == 2
+        concurrent_guests = await client.get(
+            f"/api/v1/events/{concurrent_event_id}/guests?limit=100&offset=0",
+            headers=headers,
+        )
+        assert concurrent_guests.status_code == 200
+        assert len(concurrent_guests.json()["items"]) == 2
+        untouched_third_preview = await client.get(
+            f"/api/v1/events/{concurrent_event_id}/imports/{concurrent_batch_ids[2]}/rows",
+            headers=headers,
+        )
+        assert untouched_third_preview.status_code == 200
+        assert [item["status"] for item in untouched_third_preview.json()["items"]] == [
+            "VALID",
+            "VALID",
+        ]
 
         second_event = await client.post(
             "/api/v1/events",
@@ -328,7 +551,7 @@ def test_m4_schema_api_correction_reimport_and_immutability(
             session.rollback()
 
         evidence_files = list(settings.IMPORT_EVIDENCE_STORAGE_ROOT.rglob("*.xlsx"))
-        assert len(evidence_files) == 2
+        assert len(evidence_files) == 9
         assert all("synthetic.xlsx" not in path.name for path in evidence_files)
     finally:
         runtime.close()

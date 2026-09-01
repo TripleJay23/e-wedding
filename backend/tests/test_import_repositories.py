@@ -200,12 +200,15 @@ def test_import_repository_bulk_duplicate_and_count_queries() -> None:
     row = make_row(batch)
 
     session.result = FakeResult(scalars=[["a" * 64], ["b" * 64]])
-    assert repository.valid_staged_fingerprints(batch.event_id) == [
+    assert repository.valid_staged_fingerprints(batch.id) == [
         ["a" * 64],
         ["b" * 64],
     ]
-    assert "import_batch_rows.status" in str(session.statements[-1])
-    repository.valid_staged_fingerprints(batch.event_id, exclude_row_id=row.id)
+    staged_sql = str(session.statements[-1])
+    assert "import_batch_rows.batch_id" in staged_sql
+    assert "import_batches" not in staged_sql
+    assert "import_batch_rows.status" in staged_sql
+    repository.valid_staged_fingerprints(batch.id, exclude_row_id=row.id)
     assert "import_batch_rows.id !=" in str(session.statements[-1])
 
     guest_row = SimpleNamespace(

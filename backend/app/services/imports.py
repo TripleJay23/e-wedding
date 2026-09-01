@@ -130,14 +130,11 @@ class ImportService:
         batch_id = uuid4()
         digest = hashlib.sha256(content).hexdigest()
         existing_fingerprints = self._existing_guest_fingerprints(event_id)
-        staged_fingerprints = _flatten_fingerprints(
-            self._imports.valid_staged_fingerprints(event_id)
-        )
         rows = self._build_staged_rows(
             batch_id,
             parsed,
             existing_fingerprints=existing_fingerprints,
-            staged_fingerprints=staged_fingerprints,
+            staged_fingerprints=set(),
         )
         batch = ImportBatch(
             id=batch_id,
@@ -299,7 +296,11 @@ class ImportService:
         row = self._require_locked_row(event_id, batch_id, row_id)
         if row.status != ImportRowStatus.PENDING_REVALIDATION:
             raise ImportConflictError("staged row is not pending revalidation")
-        reserved = self._reserved_fingerprints(event_id, exclude_row_id=row.id)
+        reserved = self._reserved_fingerprints(
+            event_id,
+            batch_id,
+            exclude_row_id=row.id,
+        )
         self._apply_revalidation(row, batch, administrator_id, reserved)
         self._refresh_batch_status(batch)
         self._commit_bounded("staged row revalidation could not be persisted")
@@ -315,7 +316,7 @@ class ImportService:
         """Revalidate all corrected rows once, in deterministic workbook order."""
         batch = self._require_locked_batch(event_id, batch_id)
         rows = self._imports.pending_rows_for_update(batch.id)
-        reserved = self._reserved_fingerprints(event_id)
+        reserved = self._reserved_fingerprints(event_id, batch_id)
         for row in rows:
             self._apply_revalidation(row, batch, administrator_id, reserved)
             if row.status == ImportRowStatus.VALID:
@@ -496,6 +497,7 @@ class ImportService:
     def _reserved_fingerprints(
         self,
         event_id: UUID,
+        batch_id: UUID,
         *,
         exclude_row_id: UUID | None = None,
     ) -> set[str]:
@@ -503,7 +505,7 @@ class ImportService:
         reserved.update(
             _flatten_fingerprints(
                 self._imports.valid_staged_fingerprints(
-                    event_id,
+                    batch_id,
                     exclude_row_id=exclude_row_id,
                 )
             )

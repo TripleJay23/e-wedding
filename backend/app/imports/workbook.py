@@ -46,13 +46,24 @@ _FORBIDDEN_PREFIXES = (
 )
 _FORBIDDEN_PARTS = {"xl/vbaProject.bin"}
 _HEADER_PUNCTUATION = re.compile(r"[^a-z0-9]+")
-_FOOTER_LABELS = {
-    "grand total",
-    "guest count",
-    "summary",
-    "total guests",
-    "totals",
-}
+_FOOTER_TOTAL_TOKENS = frozenset({"total", "totals"})
+_FOOTER_SUMMARY_TOKENS = frozenset({"summary"})
+_FOOTER_GUEST_TOKENS = frozenset({"guest", "guests"})
+_FOOTER_BENIGN_TOKENS = frozenset(
+    {
+        "count",
+        "grand",
+        "guest",
+        "guests",
+        "no",
+        "number",
+        "of",
+        "overall",
+        "summary",
+        "total",
+        "totals",
+    }
+)
 
 HEADER_ALIASES: dict[GuestFieldKey, frozenset[str]] = {
     GuestFieldKey.FULL_NAME: frozenset({"full name", "guest", "guest name", "name"}),
@@ -439,7 +450,17 @@ def _is_sparse_aggregate_footer(
         return False
 
     summary_cells = [cell for cell in populated if cell is not aggregate_cells[0]]
-    return len(summary_cells) == 1 and normalize_header(summary_cells[0].value) in _FOOTER_LABELS
+    return len(summary_cells) == 1 and _is_structural_footer_label(summary_cells[0].value)
+
+
+def _is_structural_footer_label(value: Any) -> bool:
+    """Recognize only compositional labels made entirely from benign summary tokens."""
+    tokens = tuple(normalize_header(value).split())
+    if not tokens or not set(tokens).issubset(_FOOTER_BENIGN_TOKENS):
+        return False
+    if set(tokens) & (_FOOTER_TOTAL_TOKENS | _FOOTER_SUMMARY_TOKENS):
+        return True
+    return "count" in tokens and bool(set(tokens) & _FOOTER_GUEST_TOKENS)
 
 
 def _cell_is_formula(cell: Cell) -> bool:

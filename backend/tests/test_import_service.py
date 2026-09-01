@@ -267,15 +267,14 @@ class FakeImportRepository:
 
     def valid_staged_fingerprints(
         self,
-        event_id: UUID,
+        batch_id: UUID,
         *,
         exclude_row_id: UUID | None = None,
     ) -> list[list[str]]:
         result: list[list[str]] = []
         for row in self.rows.values():
-            batch = self.batches[row.batch_id]
             if (
-                batch.event_id == event_id
+                row.batch_id == batch_id
                 and row.status == ImportRowStatus.VALID
                 and row.id != exclude_row_id
             ):
@@ -473,6 +472,90 @@ def test_upload_stages_valid_invalid_duplicates_and_private_evidence() -> None:
         "guests_created_from_batch": 0,
         "overall_batch_state": "VALIDATED",
     }
+
+
+def test_unconfirmed_historical_preview_does_not_reserve_retry_identity() -> None:
+    repeated_values = guest_values("Synthetic Retry", email="retry@example.test")
+    parsed = parsed_workbook(parsed_row(2, repeated_values))
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    historical_batch = make_batch(events.event)
+    historical_row = make_staged_row(
+        historical_batch,
+        2,
+        repeated_values,
+        status=ImportRowStatus.VALID,
+    )
+    historical_batch.candidate_row_count = 1
+    imports.add_batch(historical_batch, [historical_row])
+
+    retry_batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-retry.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=b"synthetic retry bytes",
+    )
+
+    retry_row = imports.list_rows(retry_batch.id, row_status=None, limit=10, offset=0)[0]
+    assert retry_row.status == ImportRowStatus.VALID
+    assert retry_row.validation_errors == []
+    assert historical_row.status == ImportRowStatus.VALID
+    assert historical_row.validation_errors == []
+
+
+def test_partial_history_blocks_persisted_identity_but_not_unconfirmed_preview() -> None:
+    imported_values = guest_values("Synthetic Imported", email="imported@example.test")
+    preview_only_values = guest_values("Synthetic Preview", email="preview@example.test")
+    parsed = parsed_workbook(
+        parsed_row(2, imported_values),
+        parsed_row(3, preview_only_values),
+    )
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    persisted_guest = Guest(
+        id=uuid4(),
+        event_id=events.event.id,
+        full_name="Synthetic Imported",
+        email="imported@example.test",
+        invitation_type="Family",
+        allowed_companions=0,
+    )
+    guests.items.append(persisted_guest)
+    historical_batch = make_batch(events.event, status=ImportBatchStatus.PARTIALLY_IMPORTED)
+    imported_row = make_staged_row(
+        historical_batch,
+        2,
+        imported_values,
+        status=ImportRowStatus.IMPORTED,
+    )
+    imported_row.guest_id = persisted_guest.id
+    preview_only_row = make_staged_row(
+        historical_batch,
+        3,
+        preview_only_values,
+        status=ImportRowStatus.VALID,
+    )
+    historical_batch.candidate_row_count = 2
+    imports.add_batch(historical_batch, [imported_row, preview_only_row])
+
+    retry_batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-partial-retry.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=b"synthetic partial retry bytes",
+    )
+
+    retry_rows = imports.list_rows(retry_batch.id, row_status=None, limit=10, offset=0)
+    assert [row.status for row in retry_rows] == [
+        ImportRowStatus.DUPLICATE,
+        ImportRowStatus.VALID,
+    ]
+    assert retry_rows[0].validation_errors[0]["code"] == "DUPLICATE_EXISTING_GUEST"
+    assert retry_rows[1].validation_errors == []
+    assert imported_row.status == ImportRowStatus.IMPORTED
+    assert preview_only_row.status == ImportRowStatus.VALID
 
 
 @pytest.mark.parametrize(
@@ -789,6 +872,42 @@ def test_batch_revalidation_reserves_first_newly_valid_identity() -> None:
     )
     assert first.status == ImportRowStatus.VALID
     assert second.status == ImportRowStatus.DUPLICATE
+
+
+def test_revalidation_ignores_valid_identity_from_another_unconfirmed_batch() -> None:
+    repeated_values = guest_values("Synthetic Retry", email="retry@example.test")
+    parsed = parsed_workbook(parsed_row(2, repeated_values))
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    historical_batch = make_batch(events.event)
+    historical_row = make_staged_row(
+        historical_batch,
+        2,
+        repeated_values,
+        status=ImportRowStatus.VALID,
+    )
+    historical_batch.candidate_row_count = 1
+    imports.add_batch(historical_batch, [historical_row])
+    retry_batch = make_batch(events.event)
+    retry_row = make_staged_row(
+        retry_batch,
+        2,
+        repeated_values,
+        status=ImportRowStatus.PENDING_REVALIDATION,
+    )
+    retry_batch.candidate_row_count = 1
+    imports.add_batch(retry_batch, [retry_row])
+
+    service.revalidate_row(
+        events.event.id,
+        retry_batch.id,
+        retry_row.id,
+        administrator_id=events.event.created_by,
+    )
+
+    assert retry_row.status == ImportRowStatus.VALID
+    assert retry_row.validation_errors == []
+    assert historical_row.status == ImportRowStatus.VALID
 
 
 def test_partial_progression_imports_valid_once_and_isolates_other_rows() -> None:

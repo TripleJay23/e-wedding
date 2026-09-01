@@ -282,7 +282,20 @@ def test_numeric_phone_remains_rejected_when_excel_formatting_is_unrecoverable()
     assert "LOSSY_VALUE_NOT_ALLOWED" in error_codes(result.rows[0])
 
 
-def test_terminal_sparse_aggregate_row_without_guest_identity_is_ignored() -> None:
+@pytest.mark.parametrize(
+    "label",
+    [
+        "TOTAL",
+        "TOTAL GUESTS",
+        "GUEST TOTAL",
+        "TOTAL NUMBER",
+        "OVERALL TOTAL",
+        "TOTAL NUMBER OF GUESTS",
+        "GUEST COUNT",
+        "SUMMARY",
+    ],
+)
+def test_terminal_sparse_aggregate_footer_uses_compositional_label_tokens(label: str) -> None:
     result = parse(
         simple_workbook(
             [
@@ -293,7 +306,7 @@ def test_terminal_sparse_aggregate_row_without_guest_identity_is_ignored() -> No
                     "Allowed Companions",
                 ],
                 [None, "Synthetic Guest", "Family", 1],
-                ["Grand Total", None, None, "=SUM(D2:D2)"],
+                [label, None, None, "=SUM(D2:D2)"],
             ]
         )
     )
@@ -380,10 +393,43 @@ def test_approximate_footer_label_is_not_fuzzily_classified() -> None:
 
 
 @pytest.mark.parametrize(
+    ("guest_field_header", "guest_evidence"),
+    [
+        ("Phone Number", "+255700000099"),
+        ("Email", "evidence@example.test"),
+        ("Table Number", "T-9"),
+        ("Category", "Friends"),
+    ],
+)
+def test_terminal_summary_label_with_guest_field_evidence_remains_candidate(
+    guest_field_header: str,
+    guest_evidence: str,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Allowed Companions",
+                    "Full Name",
+                    "Invitation Type",
+                    guest_field_header,
+                ],
+                [1, "Synthetic Guest", "Family", None],
+                ["=SUM(A2:A2)", None, "Grand Total", guest_evidence],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[1])
+
+
+@pytest.mark.parametrize(
     "footer_row",
     [
         ["=SUM(A2:A2)", None, "VIP", None],
         ["=SUM(A2:A2)", "Synthetic Formula Guest", None, None],
+        ["=SUM(A2:A2)", "Total Anderson", None, None],
         ["=SUM(A2:A2)", None, "Grand Total", "Meaningful guest category"],
     ],
 )
