@@ -48,18 +48,18 @@ def synthetic_workbook() -> bytes:
         [
             "Unmanaged Notes",
             "Full Name",
+            "Allowed Companions",
             "Invitation Type",
             "Email",
             "Phone",
-            "Allowed Companions",
             "Table Number",
         ]
     )
-    worksheet.append([None, "Synthetic Valid One", "Family", "one@example.test", None, 2, 1])
-    worksheet.append([None, "Synthetic Correctable", None, "correct@example.test", None, 0, 2.0])
-    worksheet.append([None, "Synthetic Valid Two", "Individual", None, "+255700000022", 0, "A1"])
-    worksheet.append([None, "Synthetic Duplicate", "Family", "ONE@example.test", None, 1, 12])
-    worksheet.append(["Workbook Aggregate", None, None, None, None, "=COUNTA(B4:B7)", None])
+    worksheet.append([None, "Synthetic Valid One", 2, "Family", "one@example.test", None, 1])
+    worksheet.append([None, "Synthetic Correctable", 0, None, "correct@example.test", None, 2.0])
+    worksheet.append([None, "Synthetic Valid Two", 0, "Individual", None, "+255700000022", "A1"])
+    worksheet.append([None, "Synthetic Duplicate", 1, "Family", "ONE@example.test", None, 12])
+    worksheet.append([None, None, "=COUNTA(B4:B7)", "Grand Total", None, None, None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -152,6 +152,7 @@ async def exercise_import_api(
         )
         assert staged_rows.status_code == 200
         staged_items = staged_rows.json()["items"]
+        assert [item["source_row_number"] for item in staged_items] == [4, 5, 6, 7]
         assert [item["current_values"]["table_number"] for item in staged_items] == [
             "1",
             "2",

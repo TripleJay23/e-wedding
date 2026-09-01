@@ -113,7 +113,7 @@ def test_reordered_extra_columns_and_human_formatting_are_understood() -> None:
             0,
         ]
     )
-    worksheet.append(["Total Guests", "=COUNTA(D5:D9)"])
+    worksheet.append(["Total Guests", None, None, None, None, None, None, "=COUNTA(D5:D9)"])
 
     result = parse(save_workbook(workbook))
 
@@ -162,7 +162,7 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
             [
                 ["Full Name", "Invitation Type", "Allowed Companions"],
                 ["Synthetic Formula Guest", '=UPPER("family")', 0],
-                ["Total Guests", "=COUNTA(A2:A2)", None],
+                ["Total Guests", None, "=COUNTA(A2:A2)"],
             ]
         )
     )
@@ -293,7 +293,7 @@ def test_terminal_sparse_aggregate_row_without_guest_identity_is_ignored() -> No
                     "Allowed Companions",
                 ],
                 [None, "Synthetic Guest", "Family", 1],
-                ["Workbook Aggregate", None, None, "=SUM(D2:D2)"],
+                ["Grand Total", None, None, "=SUM(D2:D2)"],
             ]
         )
     )
@@ -304,7 +304,7 @@ def test_terminal_sparse_aggregate_row_without_guest_identity_is_ignored() -> No
     )
 
 
-def test_terminal_obvious_summary_row_remains_structural_without_formula() -> None:
+def test_summary_like_text_without_aggregate_formula_remains_candidate() -> None:
     result = parse(
         simple_workbook(
             [
@@ -315,8 +315,124 @@ def test_terminal_obvious_summary_row_remains_structural_without_formula() -> No
         )
     )
 
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "REQUIRED" in error_codes(result.rows[1])
+
+
+def test_terminal_footer_label_in_mapped_invitation_type_is_structural() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.merge_cells("A1:E1")
+    worksheet["A1"] = "Synthetic Wedding Guest Register"
+    worksheet.merge_cells("A2:E2")
+    worksheet["A2"] = "Synthetic Import Preview"
+    worksheet.append([])
+    worksheet.append(
+        [
+            "Allowed Companions",
+            "Full Name",
+            "Unmanaged Notes",
+            "Invitation Type",
+            "Category",
+        ]
+    )
+    worksheet.append([1, "Synthetic Guest One", None, "Family", "Friends"])
+    worksheet.append([0, "Synthetic Guest Two", None, "Individual", None])
+    worksheet.append(["=SUM(A5:A6)", None, None, "Grand Total", None])
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [5, 6]
+    assert [item["reason"] for item in result.ignored_rows].count("PRESENTATION") == 2
+    assert [item["reason"] for item in result.ignored_rows].count("BLANK") == 1
+    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 1
+
+
+def test_terminal_footer_label_in_another_mapped_column_is_structural() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type", "Category"],
+                [1, "Synthetic Guest", "Family", "Friends"],
+                ["=SUM(A2:A2)", None, None, "Total Guests"],
+            ]
+        )
+    )
+
     assert [row.source_row_number for row in result.rows] == [2]
     assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
+
+
+def test_approximate_footer_label_is_not_fuzzily_classified() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest", "Family"],
+                ["=SUM(A2:A2)", None, "Approximate guest totals note"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[1])
+
+
+@pytest.mark.parametrize(
+    "footer_row",
+    [
+        ["=SUM(A2:A2)", None, "VIP", None],
+        ["=SUM(A2:A2)", "Synthetic Formula Guest", None, None],
+        ["=SUM(A2:A2)", None, "Grand Total", "Meaningful guest category"],
+    ],
+)
+def test_terminal_formula_rows_with_meaningful_guest_evidence_remain_candidates(
+    footer_row: list[object],
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type", "Category"],
+                [1, "Synthetic Guest", "Family", "Friends"],
+                footer_row,
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[1])
+
+
+def test_non_terminal_footer_signature_remains_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest One", "Family"],
+                ["=SUM(A2:A2)", None, "Grand Total"],
+                [0, "Synthetic Guest Two", "Individual"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[1])
+
+
+def test_incomplete_genuine_guest_at_end_remains_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest", "Family"],
+                [0, "Synthetic Needs Correction", None],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "REQUIRED" in error_codes(result.rows[1])
 
 
 def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:

@@ -407,14 +407,6 @@ def _ignored_row_reason(
     ):
         return "PRESENTATION"
 
-    first_label = normalize_header(populated[0].value)
-    other_values = [cell.value for cell in populated[1:]]
-    footer_shape = all(
-        isinstance(value, (int, float)) or (isinstance(value, str) and value.startswith("="))
-        for value in other_values
-    )
-    if seen_candidate and first_label in _FOOTER_LABELS and footer_shape:
-        return "FOOTER"
     if seen_candidate and is_terminal and _is_sparse_aggregate_footer(populated, selected_mapping):
         return "FOOTER"
     return None
@@ -435,8 +427,8 @@ def _is_sparse_aggregate_footer(
     populated: list[Cell],
     selected_mapping: dict[GuestFieldKey, int],
 ) -> bool:
-    """Recognize only a terminal aggregate row with no mapped guest evidence."""
-    if len(populated) > 2:
+    """Recognize one aggregate formula plus one deterministic summary label."""
+    if len(populated) != 2:
         return False
 
     aggregate_column = selected_mapping.get(GuestFieldKey.ALLOWED_COMPANIONS)
@@ -446,8 +438,8 @@ def _is_sparse_aggregate_footer(
     if len(aggregate_cells) != 1 or not _cell_is_formula(aggregate_cells[0]):
         return False
 
-    mapped_guest_columns = set(selected_mapping.values()) - {aggregate_column}
-    return all(cell.column not in mapped_guest_columns for cell in populated)
+    summary_cells = [cell for cell in populated if cell is not aggregate_cells[0]]
+    return len(summary_cells) == 1 and normalize_header(summary_cells[0].value) in _FOOTER_LABELS
 
 
 def _cell_is_formula(cell: Cell) -> bool:
