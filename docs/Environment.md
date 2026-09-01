@@ -108,6 +108,21 @@ This staging-only command requires the database to be at the repository's sole
 head and refuses to overwrite an existing administrator. Passwords, hashes, and
 JWT secrets are never printed.
 
+Rotate the password of that existing administrator only through the separate
+staging operator. Temporarily set `STAGING_ADMIN_ROTATION_EXPECTED_UUID` to the
+persisted singleton UUID and `STAGING_ADMIN_ROTATION_PASSWORD` to a new secret in
+the ignored `.env.staging`, then run:
+
+```text
+uv run --project backend --env-file .env.staging wedding-staging-rotate-admin-password
+```
+
+The command verifies the canonical local staging identity, PostgreSQL 17, the
+repository's sole Alembic head, the locked singleton UUID, role, and active state.
+It refuses a same-password replacement and changes only the Argon2id password hash
+plus the normal update timestamp. Remove both rotation variables after success.
+The bootstrap command remains create-once and never overwrites the administrator.
+
 Start FastAPI with the same explicit staging file:
 
 ```text

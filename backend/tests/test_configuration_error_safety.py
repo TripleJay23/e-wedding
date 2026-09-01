@@ -12,10 +12,13 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.cli import staging_alembic, staging_bootstrap_admin
+from app.cli import staging_alembic, staging_bootstrap_admin, staging_rotate_admin_password
 from app.cli.bootstrap_admin import AdministratorBootstrapSettings
 from app.cli.staging_alembic import StagingMigrationAuthorizationSettings
 from app.cli.staging_bootstrap_admin import StagingAdministratorBootstrapSettings
+from app.cli.staging_rotate_admin_password import (
+    StagingAdministratorPasswordRotationSettings,
+)
 from app.core import settings as settings_module
 from app.core.configuration_errors import (
     SENSITIVE_CONFIGURATION_FIELDS,
@@ -40,6 +43,8 @@ _CONFIGURATION_FIELDS = (
     "GENERATED_CARD_STORAGE_ROOT",
     "STAGING_ADMIN_BOOTSTRAP_USERNAME",
     "STAGING_ADMIN_BOOTSTRAP_PASSWORD",
+    "STAGING_ADMIN_ROTATION_EXPECTED_UUID",
+    "STAGING_ADMIN_ROTATION_PASSWORD",
     "STAGING_MIGRATION_AUTHORIZATION",
 )
 
@@ -83,6 +88,11 @@ def _configure_staging(
         str(private_root / "import-evidence"),
     )
     monkeypatch.setenv("STAGING_ADMIN_BOOTSTRAP_PASSWORD", admin_secret)
+    monkeypatch.setenv(
+        "STAGING_ADMIN_ROTATION_EXPECTED_UUID",
+        "00000000-0000-0000-0000-000000000001",
+    )
+    monkeypatch.setenv("STAGING_ADMIN_ROTATION_PASSWORD", admin_secret)
 
 
 def _captured_output(capsys: pytest.CaptureFixture[str]) -> str:
@@ -97,6 +107,7 @@ def test_sensitive_configuration_classification_covers_current_secret_fields() -
         "POSTGRES_STAGING_PASSWORD",
         "ADMIN_BOOTSTRAP_PASSWORD",
         "STAGING_ADMIN_BOOTSTRAP_PASSWORD",
+        "STAGING_ADMIN_ROTATION_PASSWORD",
         "JWT_SECRET",
         "STAGING_MIGRATION_AUTHORIZATION",
     } <= SENSITIVE_CONFIGURATION_FIELDS
@@ -119,7 +130,9 @@ def test_secret_bearing_settings_models_hide_inputs_in_raw_validation_errors(
         f"PRIVATE_STORAGE_ROOT={tmp_path / 'private'}\n"
         f"IMPORT_EVIDENCE_STORAGE_ROOT={tmp_path / 'private' / 'import-evidence'}\n"
         f"POSTGRES_STAGING_PASSWORD={database_secret}\n"
-        f"STAGING_ADMIN_BOOTSTRAP_PASSWORD={admin_secret}\n",
+        f"STAGING_ADMIN_BOOTSTRAP_PASSWORD={admin_secret}\n"
+        "STAGING_ADMIN_ROTATION_EXPECTED_UUID=00000000-0000-0000-0000-000000000001\n"
+        f"STAGING_ADMIN_ROTATION_PASSWORD={admin_secret}\n",
         encoding="utf-8",
     )
 
@@ -136,6 +149,7 @@ def test_secret_bearing_settings_models_hide_inputs_in_raw_validation_errors(
         AdministratorBootstrapSettings,
         StagingMigrationAuthorizationSettings,
         StagingAdministratorBootstrapSettings,
+        StagingAdministratorPasswordRotationSettings,
     ):
         assert settings_type.model_config["hide_input_in_errors"] is True
 
@@ -314,7 +328,62 @@ def test_staging_admin_configuration_refusals_are_secret_free(
     _assert_absent(output, database_secret, admin_secret, jwt_secret)
 
 
-@pytest.mark.parametrize("operator", ["migration", "admin"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "missing_app_env",
+        "invalid_integration_env",
+        "wrong_database_identity",
+        "missing_replacement_password",
+        "invalid_replacement_password",
+        "invalid_expected_uuid",
+    ],
+)
+def test_staging_admin_rotation_configuration_refusals_are_secret_free(
+    scenario: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_secret = _canary("DB")
+    admin_secret = _canary("ROTATION")
+    jwt_secret = _canary("JWT")
+    _configure_staging(
+        monkeypatch,
+        tmp_path,
+        database_secret=database_secret,
+        admin_secret=admin_secret,
+        jwt_secret=jwt_secret,
+    )
+    if scenario == "missing_app_env":
+        monkeypatch.delenv("APP_ENV")
+    elif scenario == "invalid_integration_env":
+        monkeypatch.setenv("APP_ENV", "integration")
+    elif scenario == "wrong_database_identity":
+        monkeypatch.setenv(
+            "DATABASE_URL",
+            "postgresql+psycopg://wedding_staging_app:"
+            f"{quote(database_secret, safe='')}@127.0.0.1:55432/wedding_ecard_dev",
+        )
+    elif scenario == "missing_replacement_password":
+        monkeypatch.delenv("STAGING_ADMIN_ROTATION_PASSWORD")
+    elif scenario == "invalid_replacement_password":
+        monkeypatch.setenv(
+            "STAGING_ADMIN_ROTATION_PASSWORD",
+            f"CHANGE_ME_{admin_secret}",
+        )
+    else:
+        monkeypatch.setenv("STAGING_ADMIN_ROTATION_EXPECTED_UUID", admin_secret)
+
+    assert staging_rotate_admin_password.main() == 2
+
+    output = _captured_output(capsys)
+    assert len(output) <= 2_000
+    assert "Traceback" not in output
+    _assert_absent(output, database_secret, admin_secret, jwt_secret)
+
+
+@pytest.mark.parametrize("operator", ["migration", "admin", "rotation"])
 def test_staging_database_exception_context_is_not_rendered(
     operator: str,
     tmp_path: Path,
@@ -339,9 +408,12 @@ def test_staging_database_exception_context_is_not_rendered(
     if operator == "migration":
         monkeypatch.setattr(staging_alembic, "execute", fail_with_secret)
         result = staging_alembic.main(["current"])
-    else:
+    elif operator == "admin":
         monkeypatch.setattr(staging_bootstrap_admin, "execute", fail_with_secret)
         result = staging_bootstrap_admin.main()
+    else:
+        monkeypatch.setattr(staging_rotate_admin_password, "execute", fail_with_secret)
+        result = staging_rotate_admin_password.main()
 
     assert result == 2
     output = _captured_output(capsys)

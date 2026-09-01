@@ -117,11 +117,16 @@ uv run --project backend --env-file .env.staging wedding-staging-alembic current
 uv run --project backend --env-file .env.staging wedding-staging-alembic upgrade head
 uv run --project backend --env-file .env.staging wedding-staging-alembic check
 uv run --project backend --env-file .env.staging wedding-staging-bootstrap-admin
+uv run --project backend --env-file .env.staging wedding-staging-rotate-admin-password
 uv run --project backend --env-file .env.staging uvicorn app.main:create_app --factory
 ```
 
 The staging migration and administrator commands fail closed on any development,
 test, production, remote, wrongly named, or wrongly credentialed database target.
+Bootstrap creates the singleton administrator once; password rotation requires an
+environment-only replacement secret and the expected persisted administrator UUID,
+and never creates or overwrites an identity. Remove rotation inputs from the ignored
+staging environment after the command succeeds.
 Normal Compose `stop` preserves the M10 database; never use `down -v` during the
 continuous S1-S13 campaign.
 

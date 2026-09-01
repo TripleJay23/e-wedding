@@ -28,6 +28,11 @@ class AdministratorRepository:
         statement = select(Administrator).limit(1)
         return self._session.execute(statement).scalar_one_or_none()
 
+    def list_for_update(self) -> list[Administrator]:
+        """Lock and return every administrator row for a guarded singleton mutation."""
+        statement = select(Administrator).order_by(Administrator.id).with_for_update()
+        return list(self._session.execute(statement).scalars())
+
     def add(self, administrator: Administrator) -> None:
         """Stage a new administrator for persistence."""
         self._session.add(administrator)

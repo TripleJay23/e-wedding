@@ -38,6 +38,7 @@ wedding-bootstrap-admin = "app.cli.bootstrap_admin:main"
 wedding-disposable-alembic = "app.cli.disposable_alembic:main"
 wedding-staging-alembic = "app.cli.staging_alembic:main"
 wedding-staging-bootstrap-admin = "app.cli.staging_bootstrap_admin:main"
+wedding-staging-rotate-admin-password = "app.cli.staging_rotate_admin_password:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

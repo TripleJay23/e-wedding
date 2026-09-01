@@ -15,6 +15,10 @@ Never commit `.env` or real secret values.
 
 Rotate credentials if accidental exposure occurs.
 
+The staging administrator is provisioned once. Existing-account password rotation
+uses the dedicated staging-only operator with an expected UUID guard, row lock, and
+the shared Argon2id password policy; bootstrap never overwrites the account.
+
 ## Excel uploads
 
 - allow only supported XLSX package type
