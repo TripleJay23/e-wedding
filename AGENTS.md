@@ -1,16 +1,15 @@
 # AGENTS.md — Engineering Control Rules
 
-## 1. Mission
+## 1. Mission and scope
 
-Build the backend of a secure, deterministic, production-ready wedding e-card and guest validation system without drifting from the milestone plan.
-
-The backend must be fully accepted before Flutter implementation begins.
+Maintain a secure, deterministic, production-ready wedding e-card and guest
+validation backend. Preserve accepted behavior and keep every task within its
+explicit checkpoint. Flutter is a separate later phase.
 
 ## 2. Agent neutrality
 
-These rules apply to any implementation agent: Codex, Claude Code, Gemini, or another coding agent.
-
-Do not write instructions that depend on one vendor-specific tool unless the user explicitly requests it.
+These rules apply to any implementation agent. Do not make repository guidance
+depend on one vendor-specific tool unless the user explicitly requests it.
 
 ## 3. Sources of truth
 
@@ -22,205 +21,102 @@ Read before every task:
 4. `docs/Milestones.md`
 5. the feature-specific document, if one exists
 
-When documents conflict, stop and report the conflict before implementation.
-
-Do not silently choose one interpretation.
+When documents conflict, stop and report the conflict rather than silently
+choosing an interpretation. Current source, migrations, tests, and accepted
+runtime evidence determine implemented behavior.
 
 ## 4. Anti-drift rule
 
-Every implementation task must identify:
+Every implementation task identifies the current checkpoint, exact acceptance
+criterion, accepted baseline, expected files, required tests, stop condition, and
+next checkpoint. Do not add unrelated features, refactors, deployment work, UI
+work, or convenient extras. A failed release or staging check authorizes only a
+focused diagnosis and repair followed by the same check.
 
-- current milestone
-- exact acceptance criterion being addressed
-- previous accepted baseline
-- files expected to change
-- tests required
-- explicit stop condition
-- exact next checkpoint
-
-Do not add unrelated features, refactors, architecture changes, deployment work, UI work, reporting enhancements, or "nice-to-have" improvements.
-
-A staging failure creates only one allowed next action: diagnose and fix that failure, then rerun the same checkpoint.
-
-## 5. Milestone gate rule
-
-Do not skip milestones merely because later functionality already exists in the frozen project.
-
-A milestone is complete only when:
-
-- implementation exists
-- focused tests pass
-- full backend regression passes
-- real staging acceptance for that milestone passes
-- no unresolved blocker remains
-
-## 6. Git workflow
-
-Required branches:
+## 5. Git workflow
 
 ```text
-main
-staging
-dev
-feature/*
+feature/* -> dev -> staging -> main
 ```
 
-Rules:
+- create focused feature branches from accepted `dev`;
+- use one task and one reviewable local commit per branch where practical;
+- never push, fetch, pull, alter remotes, force-push, amend accepted commits, or
+  rewrite accepted history without explicit authorization;
+- integrate accepted changes into `dev`, promote controlled candidates to
+  `staging`, and advance `main` only after the applicable release gate passes.
 
-- create feature branches from `dev`
-- one focused task per feature branch
-- commit locally only
-- never push unless the user explicitly authorizes it
-- never force-push
-- never amend an accepted commit
-- never rebase accepted history without explicit authorization
-- integrate accepted feature commits into `dev`
-- advance `staging` only for a controlled acceptance campaign
-- advance `main` only after staging acceptance is complete
+Commit format: `type(scope): concise description`.
 
-Commit format:
+## 6. Architecture and database boundaries
 
-```text
-type(scope): concise description
-```
+PostgreSQL is the only relational database platform. Development, disposable
+tests, staging, and production use separate identities. Never allow disposable
+commands to fall back to development, staging, or production.
 
-Examples:
+Before migration work, verify the environment, configured and connected host,
+database/user identity, current revision, sole repository head, and intended
+target. Routes stay thin; services own business transactions; repositories own
+persistence; parsers and renderers remain deterministic and bounded.
 
-```text
-feat(imports): add staged row correction
-fix(imports): classify trailing footers safely
-feat(qr): issue secure guest credentials
-feat(cards): persist generated guest cards
-```
+## 7. Private data and publication
 
-## 7. Database rule
+Never commit or publish:
 
-PostgreSQL is the database platform for this rebuild.
+- real `.env` files, credentials, tokens, database dumps, or backups;
+- real guest workbooks, exports, PII, or private event evidence;
+- wedding photographs, QR images/credentials, or generated cards;
+- private template packages/assets/fonts without confirmed redistribution rights;
+- test evidence containing private row values.
 
-Use separate databases/environments for:
+Use synthetic fixtures and aggregate, privacy-safe reports.
 
-- development
-- disposable tests
-- staging
-- production later
+## 8. Excel import invariant
 
-Never allow a test/disposable command to fall back to staging or production.
+Excel ingestion is a first-class staged workflow. It must use configured canonical
+fields, tolerate reordered columns, map only deterministic aliases, ignore only
+proven structural rows, never execute formulas, preserve malformed guest rows,
+support partial progression, keep invalid rows correctable/revalidatable, detect
+duplicates, and preserve history. Selected staged-row IDs must be non-empty,
+unique, batch-owned persisted UUIDs and must be preflighted atomically.
 
-Before any migration command, verify:
+The system default maximum companions per invitation is **2** and spreadsheet
+contents never redefine it.
 
-- environment name
-- host
-- database name
-- connected database identity
-- current Alembic revision
-- intended target revision
+## 9. Card and QR invariants
 
-## 8. Private data rule
+Wedding Floral V10 is identified by its approved immutable digests; do not redraw
+or approximate it. The renderer remains generic and manifest-driven, with no
+template-key rendering branch. Private package/assets/fonts remain outside Git
+unless publication rights are confirmed.
 
-Never commit:
+QR codes contain only high-entropy opaque credentials. Store only the secure
+verifier hash in PostgreSQL, bind credentials to event and guest, support explicit
+lifecycle transitions, and keep raw values inside the issuance/render boundary.
+Preview QR data is synthetic and non-resolving; permanent cards use the protected
+image of a real issued credential.
 
-- `.env`
-- credentials or tokens
-- real guest spreadsheets
-- guest exports
-- wedding photographs
-- private template source assets/fonts unless redistribution is explicitly approved
-- generated cards
-- QR images or raw QR credentials
-- database dumps
-- staging backups
-- test evidence containing private row values
+## 10. Attendance and reporting invariants
 
-Use privacy-safe aggregates in reports.
+Gate scans create immutable evidence. Corrections are append-only decisions and
+effective state is derived deterministically from gate evidence plus the correction
+chain. Reports use the shared bounded dataset, distinguish named guests from
+companions and total people, and apply strict privacy and spreadsheet-injection
+controls across JSON, CSV, and XLSX.
 
-## 9. Excel import invariant
+## 11. Testing and documentation
 
-The Excel workflow is a first-class product feature, not a helper script.
+Feature work requires focused tests, impacted regressions, the complete backend
+suite, Ruff, formatting, compile/static checks, locked dependency verification,
+build/archive hygiene, migration checks, and privacy/secret audits in proportion
+to risk. PostgreSQL feature acceptance uses a fresh guarded disposable database.
 
-It must:
+Update documentation when behavior or an operational contract changes. Preserve
+the accepted S1-S13 scenario as regression evidence; use synthetic fixtures for
+narrow technical tests.
 
-- handle configured canonical guest fields
-- tolerate reordered columns
-- identify safe aliases deterministically
-- ignore undefined columns according to contract
-- ignore presentation/title/footer rows
-- never execute formulas
-- preserve malformed guest rows as visible validation failures
-- import only valid rows after confirmation
-- preserve invalid rows for correction
-- support administrator correction and revalidation of staged invalid rows
-- support duplicate detection and safe re-import
+## 12. Required task report
 
-System default maximum companions per invitation: **2**.
-
-Never silently change that default to satisfy a workbook.
-
-## 10. Card design invariant
-
-The approved Wedding Floral design must be preserved exactly.
-
-Do not redraw it from memory.
-
-Recover and verify the approved template package from the frozen project using `docs/CardDesignReference.md`.
-
-Renderer behavior must remain generic and manifest-driven.
-
-No template-specific rendering branches.
-
-## 11. QR security invariant
-
-QR codes contain only high-entropy opaque tokens.
-
-- never encode guest PII
-- store only a secure hash of the credential
-- bind credential to guest and event
-- support active/inactive/reissue lifecycle
-- preview QR must be synthetic and non-resolving
-- permanent cards must use real guest credentials
-
-## 12. Staging continuity rule
-
-The main end-to-end acceptance story is the **Jordan & Jessica wedding scenario**.
-
-Staging reports must show continuation from the previous checkpoint rather than random disconnected test events.
-
-The test journey is:
-
-```text
-Event
-→ Card design/photo
-→ Excel import
-→ Valid guest persistence + invalid-row correction
-→ QR issuance
-→ Permanent cards
-→ Gate validation
-→ Attendance/companions
-→ Corrections
-→ Reports
-```
-
-Use isolated synthetic fixtures only for narrow technical tests. They do not replace the continuous staging scenario.
-
-## 13. Documentation timing
-
-During active implementation, update documentation only when required to prevent a dangerous contradiction.
-
-After full staging acceptance, run a dedicated documentation reconciliation milestone and align all docs to the tested implementation before promoting to `main`.
-
-## 14. Required task report
-
-Every agent task must report:
-
-- milestone/checkpoint
-- branch + HEAD
-- changes made
-- migrations
-- tests run and results
-- privacy/security checks
-- Git status
-- commit hash if created
-- whether anything was pushed
-- blockers
-- exact next checkpoint
-
-Avoid inflated reports containing unrelated details.
+Report the checkpoint, branch and HEAD, changes, migrations, tests and results,
+privacy/security checks, Git status, commit hash, push status, blockers, and exact
+next checkpoint. Stop at the stated checkpoint.

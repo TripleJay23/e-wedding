@@ -1,125 +1,92 @@
-# API Contract Plan
+# API Contract
 
-Base path:
+The implemented FastAPI surface is rooted at `/api/v1`. Except for health and
+login, routes require the active persisted `SUPER_ADMIN` bearer identity.
 
-```text
-/api/v1
-```
+## Route groups
 
-The exact OpenAPI contract is implemented and frozen milestone by milestone.
+### Health and authentication
 
-## Groups
+- `GET /health`
+- `POST /auth/login`
+- `GET /auth/me`
 
-```text
-auth
-events
-guest-fields
-guests
-imports
-templates
-event-photos
-card-designs
-qr-codes
-cards
-attendance
-reports
-health
-```
+### Events, guest fields, and guests
 
-## Core planned operations
+- create, list, get, and patch `/events` resources;
+- get and replace `/events/{event_id}/guest-fields`;
+- create, list, get, and patch `/events/{event_id}/guests` resources.
 
-### Auth
-
-- login
-- current administrator
-
-### Events
-
-- create/list/get/update as permitted
-- event policy including maximum companions
-
-### Guest fields
-
-- get/replace event guest-field configuration
+Lists are bounded and event scoped. Event lifecycle and the companion ceiling are
+validated in the service and PostgreSQL layers.
 
 ### Excel imports
 
-Required capabilities:
+Under `/events/{event_id}/imports` the API supports upload, history, batch detail,
+reconciliation, row listing, row correction, row and batch revalidation, and batch
+progression.
 
-- download template where useful
-- upload workbook
-- get batch/preview
-- list batch rows/errors
-- confirm currently eligible rows
-- correct an invalid staged row
-- revalidate corrected row/batch state
-- confirm newly eligible rows without duplicating previously imported guests
-- list import history
+`POST /events/{event_id}/imports/{batch_id}/progress` keeps its original batch-wide
+behavior when called without a body. An optional non-empty, unique
+`staged_row_ids` list selects exact persisted staged-row UUIDs. The complete
+selection is preflighted before mutation: `VALID` rows progress, `IMPORTED` rows
+are idempotent no-ops, invalid/foreign/stale selections reject atomically, and
+unselected rows remain unchanged.
 
-The correction endpoints are required before Excel milestone completion. The staged-row
-correction route accepts effective edits to unlinked `VALID`, `INVALID`, and `DUPLICATE` preview
-rows with an optimistic `expected_version`. Every accepted edit moves the row to a
-non-progressable pending-revalidation state, even when the new values may still be valid.
-Imported or guest-linked staged rows remain non-correctable through this surface.
+Correcting an unlinked `VALID`, `INVALID`, or `DUPLICATE` row requires its expected
+version and moves it to pending revalidation. Imported or guest-linked rows cannot
+be corrected through the staging surface. Original values and revision evidence
+remain preserved.
 
-`POST /api/v1/events/{event_id}/imports/{batch_id}/progress` preserves batch-wide
-progression when called without a body. An optional body containing a non-empty,
-unique `staged_row_ids` list selects an exact subset by persisted staged-row UUID.
-All selectors are validated against the requested batch before mutation. Selected
-`VALID` rows progress, already `IMPORTED` rows are idempotent no-ops, and other row
-states reject the complete selection. Unselected rows remain staged and unchanged.
+### QR credentials
 
-### Guests
+The API issues, reads, deactivates, activates, and regenerates a guest credential,
+and lists bounded event credential metadata. Responses never expose the raw bearer
+credential, verifier hash, private storage key, image bytes, or unnecessary PII.
 
-- list/get/create/update according to policy
+### Templates, photos, designs, and cards
 
-### QR
+The API supports:
 
-- issue
-- retrieve safe credential metadata
-- deactivate
-- activate where lifecycle permits
-- regenerate/reissue
-- bounded event credential metadata list
+- registration and lookup of verified Wedding Floral V10 metadata;
+- authenticated approved-preview access;
+- event-photo upload, list, selection, and protected content access;
+- design revision create/read/list, preview, approval, and revocation;
+- single and bounded bulk permanent-card generation;
+- generated-card list/metadata, protected PNG download, and selected ZIP export.
 
-M5 HTTP responses never return the raw credential, stored token hash, protected
-filesystem/storage key, or unnecessary guest PII.
+Permanent generation requires the approved current design, event photo, eligible
+guest, and active real QR credential. Protected content responses use private,
+non-cacheable semantics.
 
-### Templates and card design
+### Gate attendance and corrections
 
-- catalogue/list/get
-- event photo upload/select
-- event design create/replace/revisions
-- preview
-- approve/revoke approval
+- `POST /attendance/scan` validates one decoded opaque credential and records the
+  outcome atomically;
+- event attendance, guest attendance, and scan-attempt reads are bounded;
+- effective attendance is available by event and guest;
+- correction creation/history/detail routes are event and guest scoped.
 
-### Generated cards
-
-- generate one
-- generate eligible/all
-- list
-- retrieve protected content
-- bulk export where accepted
-
-Permanent generation requires approved design and real QR credential.
-
-### Attendance
-
-- validate/scan
-- list attendance
-- apply correction
-- read effective state
+Corrections use optimistic expectations and the closed decisions
+`SET_ATTENDED`, `SET_NOT_ATTENDED`, and `RESTORE_GATE_DERIVED`. Sensitive reason
+notes are confined to the dedicated audit-detail response.
 
 ### Reports
 
-- JSON summary
-- CSV export
-- XLSX export
+Under `/events/{event_id}/reports`:
 
-## Error rules
+- `GET /summary`
+- `GET /attendance`
+- `GET /export/{output_format}` for `csv` and `xlsx`
 
-- bounded domain errors
-- no SQL/storage/internal paths
-- no secrets
-- no raw QR hashes/tokens; the issuance/render boundary is internal to the M5 service
-- validation errors remain actionable for the administrator
+JSON, CSV, and XLSX share one bounded calculation dataset. Raw gate evidence and
+correction-aware effective attendance remain distinct; exports apply a privacy
+allowlist and spreadsheet-injection protection.
+
+## Error and privacy rules
+
+- validation errors remain actionable without echoing submitted values;
+- resource and conflict errors are bounded and do not disclose cross-event state;
+- SQL, filesystem, configuration, and secret details never enter responses;
+- raw QR values/hashes and private artifact keys are never public API fields;
+- private artifact and report responses use `Cache-Control: private, no-store`.

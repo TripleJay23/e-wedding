@@ -21,11 +21,16 @@ __pycache__/
 .uv-cache/
 .uv-python/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
+.hypothesis/
+.tox/
+.nox/
 .venv/
 venv/
 *.egg-info/
+*.whl
 build/
 dist/
 
@@ -35,6 +40,8 @@ dist/
 *.sqlite3
 *.dump
 *.sql
+pgdata/
+postgres-data/
 backend/backups/
 backups/
 
@@ -47,7 +54,11 @@ uploads/
 backend/uploads/
 *.xlsx
 *.xls
+*.xlsm
+*.xlsb
+*.ods
 *.csv
+*.tsv
 !assets/sample_excel/*.xlsx
 !assets/sample_excel/*.csv
 

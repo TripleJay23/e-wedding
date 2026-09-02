@@ -1,169 +1,64 @@
 # Database Contract
 
-PostgreSQL is authoritative.
+PostgreSQL 17 is authoritative. Alembic maintains one linear migration chain from
+`20260814_0001` through the sole head `20260821_0008`.
 
-This document lists the core domain shape. Exact columns/constraints are finalized milestone by milestone and reconciled after staging acceptance.
+## Persisted entities
 
-## Core entities
+- `users`: singleton administrator identity, Argon2id hash, role, active state,
+  and timestamps.
+- `events`: wedding identity, schedule/location, lifecycle, companion ceiling,
+  creator, and timestamps.
+- `event_guest_fields`: ordered enabled/required configuration for the seven
+  canonical guest fields.
+- `guests`: event-scoped invitation holder data, allowance, lifecycle, and
+  timestamps.
+- `import_batches`: workbook digest/size/private key, detected structure, mapping,
+  field/policy snapshots, aggregate counts, lifecycle, and timestamps.
+- `import_batch_rows`: immutable original values/errors, current values/errors,
+  identity fingerprints, status, optimistic version, optional guest link, and
+  timestamps.
+- `import_row_revisions`: append-only correction/revalidation evidence with actor
+  and validation outcome.
+- `guest_qr_credentials`: event/guest binding, unique verifier hash, protected QR
+  image identity, lifecycle, reissue link, actor, and timestamps.
+- `template_presets` and `template_preset_versions`: immutable template identity,
+  integrity digests, dimensions/counts, verification state, and actor.
+- `event_photos`: canonical private image identity, dimensions, primary selection,
+  actor, and timestamps.
+- `event_card_designs`, `event_card_design_revisions`, and
+  `event_card_design_approvals`: event design identity, immutable controls and
+  approval/revocation history.
+- `generated_guest_cards`: pinned render identities, protected artifact digest/key,
+  dimensions, lifecycle, actor, and timestamps.
+- `guest_attendance_records`: one immutable successful gate-derived admission per
+  guest with actual companions and actor.
+- `gate_scan_attempts`: immutable bounded evidence for each meaningful scan
+  outcome; stores only a credential fingerprint, never the raw value.
+- `guest_attendance_corrections`: append-only optimistic correction chain and
+  resulting effective state.
 
-### users
+Reports are calculated on demand and have no report-storage table or setting.
 
-- id
-- username/email identity
-- password_hash
-- role
-- is_active
-- created_at / updated_at
+## Core invariants
 
-MVP authenticating role: `SUPER_ADMIN`.
+- one singleton `SUPER_ADMIN`; protected authentication requires an active row;
+- guest/import/QR/card/attendance data remains event scoped;
+- event companion maximum is `0..2`, defaults to 2, and guest/admitted values
+  cannot exceed persisted policy;
+- original import snapshots are immutable; corrections and revalidations append
+  revision evidence; progression selections lock and validate all selected rows;
+- QR verifier hashes are unique and one current lifecycle identity is enforced;
+- template and design revision identities are immutable; permanent cards pin all
+  accepted render inputs;
+- successful attendance is unique per event/guest and gate evidence is immutable;
+- correction decisions are closed and append-only with monotonic revisions;
+- database constraints and transaction locks protect invariants against direct or
+  concurrent bypasses.
 
-### events
+## Operational rules
 
-- id
-- event_name
-- bride_name
-- groom_name
-- event_date/time
-- venue/address/description as supported
-- status
-- `max_companions_per_invitation` — non-negative integer, **default 2**
-- created_by
-- timestamps
-
-### event_guest_fields
-
-Canonical initial fields:
-
-```text
-full_name
-phone_number
-email
-invitation_type
-allowed_companions
-table_number
-category
-```
-
-Each event stores enabled/required rules.
-
-### guests
-
-- id
-- event_id
-- full_name required
-- phone_number optional
-- email optional
-- invitation_type required
-- allowed_companions non-negative and not above event policy
-- table_number optional
-- category optional
-- status
-- timestamps
-
-### import_batches
-
-Stores immutable upload/validation context:
-
-- event
-- workbook digest/metadata (privacy-safe)
-- detected sheet/header metadata
-- mapping snapshot
-- guest-field snapshot
-- event companion-policy snapshot
-- status
-- timestamps
-
-### import_batch_rows
-
-Stores normalized staged guest candidates:
-
-- batch + source row number
-- canonical normalized fields
-- validation state
-- structured error codes
-- duplicate state
-- correction/version state
-- eligibility state
-
-Do not store executed formula results.
-
-### import_row_corrections / revision history
-
-Required for in-app correction workflow:
-
-- row reference
-- changed canonical values
-- actor
-- revision/configuration version
-- validation result
-- timestamp
-
-Original imported row snapshot remains auditable.
-
-### guest_qr_credentials
-
-- id
-- event_id
-- guest_id
-- token_hash
-- protected QR image storage key and image digest
-- active / inactive / superseded state
-- issuance/reissue metadata and lifecycle timestamps
-- timestamps
-
-Raw token is not stored. The storage key and token hash are internal and are not
-part of the HTTP response contract.
-
-### template_presets / template_preset_versions
-
-Versioned immutable template catalogue and canonical package identity.
-
-### event_photos
-
-Canonicalized metadata-free event photo assets and primary selection.
-
-### event_card_designs / revisions
-
-Event-level design state, immutable revisions, explicit template version, name policies, and editable controls.
-
-### event_card_design_approvals
-
-Pins the exact approved current design revision for permanent generation.
-
-### generated_guest_cards
-
-- event
-- guest
-- approved design revision
-- QR credential identity
-- render-input identity/version
-- storage key
-- SHA-256
-- generated_at
-- status
-
-### guest_attendance_records
-
-Immutable gate-derived attendance evidence, including admitted companions.
-
-### guest_attendance_corrections
-
-Append-only authorized corrections used to compute effective attendance.
-
-### audit_logs
-
-Security-sensitive administrative actions where required.
-
-## Critical constraints
-
-- one guest belongs to one event
-- guest companions >= 0 and <= event max
-- event max companions >= 0, default 2
-- one active QR credential per guest where lifecycle requires
-- QR token hash unique
-- one active template version per preset
-- template versions immutable after verification/activation
-- event design revisions immutable
-- generated card identity unique under accepted idempotency key
-- attendance duplicate prevention enforced transactionally
-- correction decisions closed to supported enum values
+Development, disposable test, staging, and production identities are separate.
+Migration commands must verify the connected database and revision before action.
+Tests must never fall back to development or staging. Schema history must not be
+squashed during release cleanup.

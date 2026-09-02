@@ -2,75 +2,61 @@
 
 ## Purpose
 
-Build a secure, professional, mobile-first wedding e-card and guest validation system whose backend is complete and proven before Flutter implementation begins.
+Provide a secure, deterministic wedding e-card and guest-validation backend that
+supports the full event journey and a future mobile administrator/gate client.
 
-The system manages the full event journey from guest import to gate entry and reporting.
+## Current state
+
+Backend functionality through reports has passed the continuous staging replay and
+release gate. Repository finalization is in progress. Main promotion, publication,
+and Flutter implementation are separate later checkpoints.
 
 ## Primary user
 
-The MVP has one authenticated administrator account with full administrative capability. Additional user roles are deferred unless explicitly reintroduced later.
+The MVP has one authenticated active `SUPER_ADMIN` with full administrative
+capability. Additional roles are outside the accepted backend scope unless
+explicitly reintroduced.
 
-## Core backend outcome
-
-A completed backend must support this end-to-end flow:
+## Accepted product journey
 
 ```text
-Admin authentication
-→ Wedding event setup
-→ Guest field/policy configuration
-→ Excel guest import
-→ Validation and preview
-→ Import valid rows
-→ Correct invalid staged rows and revalidate
-→ Guest management
-→ Secure QR issuance
-→ Exact approved wedding-card design finalization
-→ Permanent personalized card generation
-→ Card download/export
-→ QR gate validation
-→ Attendance + companion admission
-→ Attendance corrections
-→ Event reports and exports
+administrator authentication -> event and guest policy -> staged Excel import
+-> partial progression -> row correction/revalidation -> guest reconciliation
+-> secure QR issuance -> exact approved design/photo -> permanent cards
+-> gate validation and companion admission -> append-only corrections
+-> reconciled JSON/CSV/XLSX reports
 ```
 
 ## Locked product decisions
 
-- Backend: FastAPI / Python.
-- Database: PostgreSQL across development, disposable integration tests, staging, and production later.
-- Mobile: Flutter after backend completion.
-- Git: `feature/* → dev → staging → main`.
-- Agents commit locally only unless the user explicitly authorizes remote operations.
-- System default maximum companions per invitation: **2**.
-- Excel validation errors do not necessarily block valid rows; valid rows can be imported while invalid rows remain for correction.
-- Invalid staged import rows must have an administrator correction/revalidation workflow before Excel Import is declared complete.
-- The exact approved Wedding Floral card design must be preserved rather than recreated.
-- Preview QR codes are synthetic and non-resolving; permanent cards use real secure guest QR credentials.
-- Documentation reconciliation happens after successful full staging acceptance, before promotion to `main`.
+- FastAPI/Python backend and PostgreSQL 17 across environments;
+- branch flow `feature/* -> dev -> staging -> main` with explicit authorization
+  for remote operations;
+- default maximum companions per invitation is exactly 2;
+- Excel mapping and classification are deterministic, formulas are never executed,
+  valid rows can progress independently, and invalid rows remain correctable;
+- Wedding Floral V10 is preserved by exact integrity anchors through a generic
+  manifest-driven renderer;
+- preview QR is synthetic while permanent cards use protected images of real,
+  event/guest-bound opaque credentials whose raw values are not stored;
+- gate evidence is immutable, corrections are append-only, and reports preserve
+  raw-versus-effective attendance semantics;
+- private guest, workbook, photo, template, QR, card, report, secret, and database
+  material remains outside Git.
 
-## Non-goals for backend MVP
+## Non-goals without explicit approval
 
-Do not implement without explicit approval:
+- payments, billing, public RSVP, messaging automation, or social automation;
+- multi-tenant SaaS roles/billing;
+- AI guest analytics, fuzzy import decisions, or AI photo cropping;
+- unconstrained drag-and-drop design tooling;
+- advanced offline synchronization;
+- repository publication, production deployment, or Flutter implementation as an
+  implied consequence of backend completion.
 
-- payments or billing
-- SMS/WhatsApp automation
-- public RSVP portal
-- multi-tenant SaaS billing
-- AI guest analytics
-- unconstrained drag-and-drop card designer
-- social media automation
-- advanced offline synchronization
+## Release completion boundary
 
-## Definition of backend done
-
-The backend is done only when:
-
-1. every backend milestone is implemented;
-2. focused and full regression tests pass;
-3. the continuous Jordan & Jessica staging scenario passes end to end;
-4. Excel import handles incomplete data as designed;
-5. real QR credentials are used on permanent generated cards;
-6. gate/attendance/report flows reconcile correctly;
-7. security/privacy checks pass;
-8. documentation is reconciled to actual tested behavior;
-9. `staging` is accepted and promoted to `main` locally;
-10. final `main` verification passes.
+Release preparation is complete only after documentation and repository cleanup
+pass, protected/private boundaries are reverified, the final name and license are
+decided, accepted staging is promoted to `main` under an explicit checkpoint, and
+the owner authorizes any GitHub remote or push. Flutter remains subsequent work.

@@ -1,64 +1,46 @@
-# Environment Plan
+# Environment and Operations
 
-## Environments
+## Environment separation
 
-### Development
+| Environment | Required identity | Storage |
+|---|---|---|
+| Development | `APP_ENV=development`, local `wedding_ecard_dev` | private local root |
+| Disposable integration | `APP_ENV=test`, unique local `wedding_ecard_disposable_*` | unique temporary root |
+| Staging | `APP_ENV=staging`, local `wedding_ecard_staging`, user `wedding_staging_app` | persistent absolute private root |
+| Production | `APP_ENV=production`, separately approved identity | separately provisioned private storage |
 
-- `APP_ENV=development`
-- PostgreSQL database `wedding_ecard_dev`
-- private local storage
+Commit only `.env.example`, `backend/.env.example`, and
+`.env.staging.example`. Real `.env`, `backend/.env`, and `.env.staging` files
+contain secrets and remain ignored.
 
-### Automated/disposable integration test
+## Development
 
-- `APP_ENV=test`
-- unique disposable PostgreSQL database name
-- separate private temporary storage
-- hard refusal of staging/production database identity
-
-### Staging
-
-- `APP_ENV=staging`
-- PostgreSQL `wedding_ecard_staging`
-- persistent private staging storage
-- continuous Jordan & Jessica acceptance scenario
-
-### Production later
-
-Configured only during deployment milestone.
-
-## Environment files
-
-Commit only examples:
+Copy `.env.example` to `.env`, replace every placeholder, and keep
+`POSTGRES_DEV_PASSWORD` synchronized with the password in `DATABASE_URL`.
 
 ```text
-.env.example
-backend/.env.example
-.env.staging.example
+docker compose up -d postgres
+uv sync --project backend --all-extras --locked
+uv run --project backend --env-file .env wedding-alembic current
+uv run --project backend --env-file .env wedding-alembic upgrade head
+uv run --project backend --env-file .env wedding-alembic check
+uv run --project backend --env-file .env wedding-bootstrap-admin
+uv run --project backend --env-file .env uvicorn app.main:create_app --factory
 ```
 
-Never commit:
+Remove `ADMIN_BOOTSTRAP_PASSWORD` after the singleton account is provisioned.
 
-```text
-.env
-backend/.env
-.env.staging
-```
+## Disposable PostgreSQL tests
 
-## Canonical local staging workflow
+Disposable commands require `APP_ENV=test`, an explicit local PostgreSQL URL,
+and a unique database name beginning with `wedding_ecard_disposable_`. They verify
+the connected identity and refuse development, staging, production, remote, or
+ambiguous targets. Each acceptance run creates and removes only its own synthetic
+database and storage roots.
 
-Local M10 staging uses these explicit tracked contracts:
+## Canonical local staging
 
-```text
-compose.staging.yaml
-.env.staging.example
-```
-
-Copy `.env.staging.example` to the ignored `.env.staging`, replace every
-`CHANGE_ME` value, keep the database password synchronized between
-`POSTGRES_STAGING_PASSWORD` and `DATABASE_URL`, and use absolute private-storage
-paths. The real file is never committed.
-
-The canonical local identity is:
+The current operational staging contract remains:
 
 ```text
 APP_ENV=staging
@@ -69,91 +51,46 @@ Compose project=wedding-ecard-backend-staging
 volume=wedding-ecard-m10-staging-v2-postgres-data
 ```
 
-The pre-existing `wedding-ecard-staging-postgres-data` volume is unverified
-legacy state. The V2 staging workflow never mounts, renames, mutates, or deletes it.
+The milestone-bearing volume name is retained until a separately approved,
+backup-backed naming migration. The older
+`wedding-ecard-staging-postgres-data` volume is unverified and must not be mounted,
+renamed, mutated, or deleted as part of ordinary operations.
 
-Prepare and start the PostgreSQL 17 service:
+Copy `.env.staging.example` to the ignored `.env.staging`, replace all
+placeholders, and set every private storage root to an absolute path beneath
+`PRIVATE_STORAGE_ROOT`.
 
 ```text
-Copy-Item .env.staging.example .env.staging
 docker compose --env-file .env.staging -f compose.staging.yaml up -d postgres
-```
-
-Verify the sanitized target and initialize or upgrade only through the dedicated
-authorization-gated command:
-
-```text
 uv run --project backend --env-file .env.staging wedding-staging-alembic current
-# After confirming an empty DB or fresh backup and no active writers, set:
-# STAGING_MIGRATION_AUTHORIZATION=APPLY_ACCEPTED_SCHEMA_TO_CANONICAL_STAGING
 uv run --project backend --env-file .env.staging wedding-staging-alembic upgrade head
 uv run --project backend --env-file .env.staging wedding-staging-alembic check
-```
-
-Ordinary `wedding-alembic` continues to refuse staging mutation. The dedicated
-command requires exact staging environment/database/user/local-host identity,
-PostgreSQL 17, the public operator acknowledgement in `.env.staging`, and the
-repository's sole Alembic head.
-
-Reset or remove the acknowledgement after the migration so each later staging
-schema change requires a fresh backup/writer check and deliberate authorization.
-
-Provision the singleton staging administrator exactly once:
-
-```text
 uv run --project backend --env-file .env.staging wedding-staging-bootstrap-admin
-```
-
-This staging-only command requires the database to be at the repository's sole
-head and refuses to overwrite an existing administrator. Passwords, hashes, and
-JWT secrets are never printed.
-
-Rotate the password of that existing administrator only through the separate
-staging operator. Temporarily set `STAGING_ADMIN_ROTATION_EXPECTED_UUID` to the
-persisted singleton UUID and `STAGING_ADMIN_ROTATION_PASSWORD` to a new secret in
-the ignored `.env.staging`, then run:
-
-```text
 uv run --project backend --env-file .env.staging wedding-staging-rotate-admin-password
-```
-
-The command verifies the canonical local staging identity, PostgreSQL 17, the
-repository's sole Alembic head, the locked singleton UUID, role, and active state.
-It refuses a same-password replacement and changes only the Argon2id password hash
-plus the normal update timestamp. Remove both rotation variables after success.
-The bootstrap command remains create-once and never overwrites the administrator.
-
-Start FastAPI with the same explicit staging file:
-
-```text
 uv run --project backend --env-file .env.staging uvicorn app.main:create_app --factory
 ```
 
-`GET /api/v1/health` proves process health; `wedding-staging-alembic current`
-proves database connectivity and sanitized identity. Normal shutdown preserves
-the database:
+Staging schema mutation requires the exact public acknowledgement
+`STAGING_MIGRATION_AUTHORIZATION=APPLY_ACCEPTED_SCHEMA_TO_CANONICAL_STAGING`, a
+backup and writer check, PostgreSQL 17, the canonical local identity, and the sole
+repository Alembic head. Remove the acknowledgement after use.
+
+Bootstrap creates the staging administrator once. Rotation temporarily requires
+the expected persisted UUID and a new environment-only password; remove both
+rotation variables after success.
+
+Normal shutdown preserves state:
 
 ```text
 docker compose --env-file .env.staging -f compose.staging.yaml stop postgres
 ```
 
-Never use `down -v` during S1-S13. It deletes the canonical persistent staging
-volume and is a deliberate destructive reset, not a normal start/stop command.
-Outside an active campaign, an explicitly approved reset must first confirm the
-exact Compose project/volume and recovery position; only then may an operator run
-`docker compose --env-file .env.staging -f compose.staging.yaml down -v`.
+`down -v` is a destructive reset and requires separate explicit authorization,
+exact project/volume verification, and a confirmed recovery position.
 
-## Migration command guard
+## Migration safety sequence
 
-Before Alembic:
-
-1. print sanitized configured target;
-2. connect;
-3. query actual DB identity;
-4. verify environment/database allow-list;
-5. verify current revision;
-6. run requested migration.
-
-Staging mutation additionally requires the dedicated staging command and its
-explicit operator acknowledgement. Development and disposable migration behavior
-is unchanged.
+Before every migration action: sanitize the configured target, connect, read the
+actual database/user identity, verify the environment allowlist, inspect current
+and target revisions, confirm the sole head, and only then execute the requested
+operation. The current repository head is `20260821_0008`.

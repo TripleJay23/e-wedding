@@ -1,121 +1,62 @@
 # Engineering Workflow
 
-## 1. Development lifecycle
+## Change lifecycle
 
 ```text
-plan milestone
-→ feature branch
-→ implement focused task
-→ focused tests
-→ full backend regression
-→ local commit
-→ review
-→ fast-forward into dev
-→ when milestone candidate is ready, advance staging
-→ run continuous staging acceptance
-→ fix failures on feature branches
-→ rerun same failed checkpoint
+define checkpoint -> verify accepted baseline -> feature branch from dev
+-> focused implementation -> focused and full verification -> local commit
+-> review -> fast-forward dev -> controlled staging promotion and acceptance
+-> controlled main promotion
 ```
 
-## 2. Branch responsibilities
+Each task states its acceptance criterion, expected files, required tests, stop
+condition, and next checkpoint. Scope does not expand because adjacent work is
+convenient.
 
-### `feature/*`
+## Branch responsibilities
 
-One focused task. Created from current accepted `dev`.
+- `feature/*`: one focused task from current accepted `dev`;
+- `dev`: integration of reviewed feature commits;
+- `staging`: controlled release candidate and continuous acceptance environment;
+- `main`: only fully accepted release state.
 
-### `dev`
+Use fast-forward integration where required. Never push, fetch, pull, change
+remotes, force-push, rebase accepted history, or amend an accepted commit without
+explicit authorization.
 
-Integration branch for accepted feature commits.
+## Failure workflow
 
-### `staging`
+At the first confirmed defect, stop the checkpoint, distinguish product failure
+from harness/environment failure, and report evidence. Product repair occurs on a
+narrow feature branch, returns through `dev` and `staging`, and reruns the same
+failed checkpoint with the same relevant input. Do not start unrelated work.
 
-Release-candidate branch and full workflow acceptance environment.
+## PostgreSQL workflow
 
-A staging failure does not trigger unrelated development. It produces a focused fix that returns through `feature/* → dev → staging`.
+PostgreSQL is required throughout. Before migration or integration work, verify
+sanitized configured and connected identity, environment, host, database/user,
+current revision, sole head, intended target, and protected-storage boundary.
+Disposable tests use only unique local `wedding_ecard_disposable_*` databases.
 
-### `main`
+## Staging continuity
 
-Backend release branch. Only receives the fully accepted staging state.
-
-## 3. Remote operations
-
-Default rule: agents do not push, fetch, pull, open PRs, or alter remotes unless the user explicitly authorizes that operation.
-
-The user controls the eventual GitHub upload.
-
-## 4. PostgreSQL workflow
-
-Use PostgreSQL throughout this rebuild.
-
-Before migrations, agents must print/verify a sanitized target identity and current/target revision.
-
-Disposable integration databases must have unmistakably disposable names and an explicit guard that refuses staging/production names.
-
-## 5. Staging story continuity
-
-The main acceptance narrative is Jordan & Jessica's wedding.
-
-Every staging report starts with:
+The accepted Jordan & Jessica wedding scenario remains the primary end-to-end
+regression story:
 
 ```text
-Scenario: Jordan & Jessica Wedding
-Current checkpoint: ...
-Previous accepted checkpoint: ...
-Current persisted event state: ...
-Input used: ...
-Expected behavior: ...
-Observed behavior: ...
-Outcome: PASS / BLOCKED
-Next exact checkpoint: ...
+authentication and event -> policy and fields -> workbook preview
+-> partial progression -> correction/revalidation -> duplicate replay
+-> QR issuance -> design/photo -> permanent cards -> gate admission
+-> corrections -> reports -> full replay
 ```
 
-Do not replace this storyline with random synthetic scenarios. Synthetic data is allowed for narrow regression/concurrency tests only.
+Real checkpoint inputs are used only when explicitly supplied. Synthetic fixtures
+support narrow technical tests but do not replace staging continuity.
 
-## 6. Excel staging workflow
+## Documentation and release workflow
 
-```text
-explicit user workbook upload
-→ structural understanding
-→ mapping
-→ row classification
-→ validation
-→ preview
-→ user/admin review
-→ confirm valid rows
-→ reconcile persisted guests
-→ inspect invalid rows
-→ correct staged invalid values in app/backend
-→ revalidate
-→ confirm newly eligible rows
-→ duplicate/re-import test
-→ Excel milestone accepted
-```
-
-The system must prompt for/use the workbook explicitly supplied for that checkpoint. It must not silently reuse a cached previous private workbook.
-
-## 7. Failure workflow
-
-When a checkpoint fails:
-
-1. stop at first meaningful defect;
-2. classify root cause;
-3. do not fix in the same acceptance task;
-4. create one narrow fix task;
-5. implement on `feature/*`;
-6. test and commit locally;
-7. integrate into `dev`;
-8. advance `staging`;
-9. rerun the exact same acceptance checkpoint/input.
-
-## 8. Documentation workflow
-
-Do not continuously rewrite all architecture documents during the staging campaign.
-
-After the entire backend staging journey passes:
-
-1. audit implementation against docs;
-2. update all docs to actual tested behavior;
-3. run final security/release checks;
-4. promote staging to main;
-5. verify main;
-6. user performs GitHub upload.
+Documentation changes accompany accepted contract or operational changes and must
+match current source, migrations, tests, and runtime evidence. Release preparation
+also verifies archive hygiene, publication exclusions, licensing position, and
+Git state. Repository rename, remote configuration, publication, main movement,
+and Flutter work each require their own explicit checkpoint.

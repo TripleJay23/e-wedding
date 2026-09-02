@@ -1,228 +1,110 @@
 # Architecture
 
-## 1. System shape
+## System shape
 
 ```text
-Flutter mobile app (later)
-        │ HTTPS / JSON / multipart
-        ▼
-FastAPI backend
-        │
-        ├── PostgreSQL
-        ├── private file storage
-        └── deterministic rendering / Excel / QR services
+Future Flutter client
+        | HTTPS / JSON / multipart
+        v
+FastAPI application
+        |
+        +-- PostgreSQL 17
+        +-- private file storage
+        +-- deterministic Excel, QR, image, and report components
 ```
 
-The backend is the authoritative source for identity, event policies, guest state, import validation, QR credentials, card design selection, generated-card records, attendance, corrections, and reports.
+The backend is authoritative for administrator identity, event policy, guests,
+import validation, QR lifecycle, card designs and artifacts, gate evidence,
+attendance corrections, and reports.
 
-## 2. Backend modules
+## Application boundaries
 
-Recommended bounded modules:
+`backend/app` separates:
+
+- `api/routes` and `schemas`: authenticated HTTP contracts and safe responses;
+- `services`: transaction ownership and domain rules;
+- `repositories`: bounded PostgreSQL queries and locking;
+- `models`: SQLAlchemy persistence contracts and database-backed invariants;
+- `imports`, `qr`, `cards`, and `reports`: deterministic specialized components;
+- `cli`: guarded development, disposable, and staging operators;
+- `core` and `db`: fail-closed settings, security, identity, and runtime safety.
+
+Routes remain thin. Services own mutations and transaction decisions. Repositories
+keep event scoping and query bounds explicit. Parsers and renderers do not make
+network calls or invoke AI/LLM services.
+
+## PostgreSQL and migrations
+
+PostgreSQL is the sole relational platform. The protected identities
+`wedding_ecard_dev`, unique `wedding_ecard_disposable_*` databases, and
+`wedding_ecard_staging` remain isolated. Guarded operators verify configured and
+connected identity before migrations. Alembic has one linear history through
+`20260821_0008`; it was built cleanly and does not inherit another repository's
+migration chain.
+
+## Private storage
+
+Server-controlled roots contain import evidence, verified templates, canonical
+event photos, QR images, and generated cards. Paths are derived from internal UUIDs
+or digests, validated against their configured root, and never returned by HTTP
+metadata schemas. Staging and production require absolute child roots inside the
+configured private root.
+
+## Authentication
+
+The MVP persists one active `SUPER_ADMIN`. Passwords use Argon2id. Short-lived
+HS256 access tokens require strict subject, issuer, audience, issued-at, and expiry
+claims; protected requests reload the persisted active administrator.
+
+## Excel import
 
 ```text
-auth
-events
-guest_fields
-guests
-imports
-templates
-card_designs
-photos
-qr
-cards
-attendance
-reports
-audit
-storage
-health
+bounded XLSX bytes -> package validation -> sheet/header detection
+-> deterministic mapping -> structural classification -> lossless normalization
+-> row/duplicate validation -> persisted batch and rows -> partial progression
+-> correction -> explicit revalidation -> later progression and reconciliation
 ```
 
-Routes must remain thin. Business logic belongs in services. Persistence belongs in repositories. Renderers/parsers should be deterministic pure components wherever practical.
+Formulas are inspected as formulas and never executed. Structural rows require
+strong contextual evidence; malformed genuine rows remain visible. Original row
+snapshots and revision history are retained while current corrected values evolve
+under optimistic version checks.
 
-## 3. Database
+## Templates and permanent cards
 
-PostgreSQL is the single relational database platform for this rebuild.
+Template packages are immutable versions verified by package, logical, manifest,
+and preview digests. The renderer consumes a validated generic manifest and has no
+template-key conditional rendering path. Event photos are canonicalized and
+metadata-free. Design revisions and approvals are append-only identities.
 
-Separate databases:
+Permanent generated cards pin the event, guest, design revision, approval,
+template version, photo controls, active QR credential, renderer contract, render
+input digest, storage reference, and artifact digest. Identical current inputs are
+idempotent.
 
-- `wedding_ecard_dev`
-- disposable test databases with explicit unique names
-- `wedding_ecard_staging`
-- production database later
+## QR lifecycle
 
-Never let test configuration fall back to staging.
+Issuance creates a high-entropy opaque value, renders it to protected QR bytes,
+stores only the lowercase SHA-256 verifier and protected image metadata, and then
+discards the raw value. Credentials are event/guest bound and support active,
+inactive, and superseded states. Scanning hashes the submitted value; management
+APIs expose metadata only.
 
-Use SQLAlchemy 2 and Alembic.
+## Gate evidence, corrections, and reports
 
-## 4. Storage
+A scan validates event scope, credential/guest lifecycle, duplicate state, and
+companion bounds in one transaction. Successful attendance and every meaningful
+scan attempt are immutable evidence. Corrections form an append-only optimistic
+revision chain; effective state is a deterministic reduction over gate evidence
+and the latest correction.
 
-Private local storage during backend development and staging.
+Reports use one read-only bounded dataset for JSON, CSV, and XLSX. Named invitation
+holders, companion capacity, admitted companions, and total people are distinct
+metrics. Exports omit contact data, notes, table/category values, QR/card data,
+correction notes, and actor identities.
 
-Logical roots:
+## Versioning and privacy
 
-```text
-private/templates/
-private/event-photos/
-private/qr-codes/
-private/generated-cards/
-private/reports/
-private/import-evidence/
-```
-
-Production may later use S3-compatible object storage behind the same storage interfaces.
-
-## 5. Authentication
-
-MVP:
-
-- persisted administrator account
-- Argon2id password hashing
-- short-lived JWT access token
-- strict issuer/audience validation
-- server reloads persisted active user on protected requests
-- `SUPER_ADMIN` authorization for administrative workflows
-
-Do not expose future inactive roles in the mobile MVP.
-
-## 6. Excel import architecture
-
-The import pipeline is staged and immutable enough for auditability:
-
-```text
-upload bytes
-→ safe XLSX package validation
-→ sheet/header detection
-→ deterministic field mapping
-→ structural row classification
-→ lossless normalization
-→ row validation
-→ duplicate analysis
-→ ImportBatch + ImportBatchRow persistence
-→ preview
-→ confirmation of eligible rows
-→ correction/revalidation of invalid staged rows
-→ later confirmation of newly eligible rows
-```
-
-Important principles:
-
-- no formula execution
-- no fuzzy silent guessing
-- malformed guest rows stay visible
-- presentation/footer rows are ignored only with strong structural evidence
-- batch snapshots preserve the event guest-field and policy context used for validation
-- valid rows may proceed even when other rows are invalid
-- corrections never mutate the original uploaded workbook
-
-## 7. Companion policy
-
-System default:
-
-```text
-max_companions_per_invitation = 2
-```
-
-Each guest has `allowed_companions` within `0..event.max_companions_per_invitation`.
-
-Event-specific changes are explicit administrator policy changes, never inferred from spreadsheet data.
-
-## 8. Template/card architecture
-
-Templates are immutable versioned packages.
-
-```text
-TemplatePreset
-→ TemplatePresetVersion
-→ EventCardDesign
-→ EventCardDesignRevision
-→ EventCardDesignApproval
-→ GeneratedGuestCard
-```
-
-The renderer reads a validated manifest and generic layer definitions.
-
-Supported layer concepts include:
-
-- text
-- static asset
-- photo
-- QR
-- shape
-- line
-
-Template-specific asset names, coordinates, colors, fonts, or composition logic must not be hardcoded in renderer branches.
-
-## 9. QR architecture
-
-For each guest/event credential:
-
-1. generate cryptographically secure opaque token;
-2. render the QR image while the raw token exists only inside the issuance boundary;
-3. store the protected QR image for M6 and only a secure lookup hash in PostgreSQL;
-4. discard the raw token after successful issuance;
-5. bind credential and image to event and guest;
-6. support active/inactive/reissue lifecycle;
-7. scanning later hashes the submitted token and looks up the credential safely.
-
-The M5 HTTP API returns metadata only. QR content contains no guest PII, and M6
-uses the protected image without recovering or storing the raw token.
-
-## 10. Permanent generated-card architecture
-
-A permanent generated card must pin:
-
-- event
-- guest
-- approved design revision
-- template version
-- canonical event photo selection/revision inputs
-- real QR credential identity
-- deterministic rendered artifact digest
-- storage reference
-- generation timestamp
-
-Generation must be idempotent under an explicit version/input identity contract.
-
-## 11. Attendance architecture
-
-Gate flow:
-
-```text
-scan token
-→ credential validation
-→ event match
-→ guest eligibility
-→ duplicate attendance check
-→ companion-admission validation
-→ immutable gate evidence
-→ effective attendance state
-```
-
-Corrections are explicit append-only decisions; reports derive effective state from gate evidence plus corrections.
-
-## 12. Reports
-
-JSON/CSV/XLSX reports derive from authoritative event/guest/attendance state.
-
-Keep named invitation-holder counts distinct from companion counts and total people counts.
-
-## 13. API versioning
-
-Base prefix:
-
-```text
-/api/v1
-```
-
-No breaking route/schema change without an explicit architecture decision.
-
-## 14. Observability and privacy
-
-- safe structured logs
-- correlation/request IDs where useful
-- no secrets, raw QR credentials, spreadsheet row contents, photo bytes, or guest PII in routine logs
-- bounded public error messages
-
-## 15. Backend completion boundary
-
-Do not start Flutter implementation until full staging acceptance and `main` promotion are complete.
+The HTTP base remains `/api/v1`; breaking contract changes require an explicit
+architecture decision. Routine logs and public errors exclude secrets, raw QR
+values, workbook rows, photo bytes, PII, SQL details, and private paths.

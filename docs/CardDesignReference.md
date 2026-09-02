@@ -1,143 +1,95 @@
-# Exact Wedding Floral Card Design Reference
+# Wedding Floral V10 Card Design Reference
 
-## Non-negotiable rule
+## Approved identity
 
-Do not recreate the approved card by eye.
-
-The clean rebuild must recover and use the exact validated Wedding Floral Version 10 package from the frozen project.
-
-## Identity anchors
+Wedding Floral V10 is an exact verified private template package. It must not be
+redrawn, approximated, or implemented through template-specific renderer logic.
 
 ```text
-template_key: wedding_floral
-template_version: 10
-canvas: 1240 × 1748
+template key: wedding_floral
+template version: 10
+canvas: 1240 x 1748
 raw package SHA-256: b0ec16e8d1b1a715f16c55b14bec100066fc1dc05f90c7c86b239f7ee734c782
-approved default preview SHA-256: 1f7e8a38af04b0729935d04e8473a1e74a7309066bac875b4068ba48e784dda8
+logical package SHA-256: 75446293b53acf292b8900e61042239c01ad80b6ed66365e30710834ded6eed4
+manifest SHA-256: ccf84b1cb02716c1d0b5c9b830203d1399675a41aacedd02b2b52ac917bb01be
+approved preview SHA-256: 1f7e8a38af04b0729935d04e8473a1e74a7309066bac875b4068ba48e784dda8
 preview QR payload: PREVIEW-QR-DO-NOT-SCAN
-logical package entries: 9
-assets: 6
-fonts: 2
+logical entries: 9 (manifest, 6 assets, 2 fonts)
 ```
 
-The implementation agent with frozen-folder access must locate the package by hash and verify every logical file before reuse.
+The verified archive is 598,060 bytes. Its approved synthetic preview is a
+metadata-free 1240 x 1748 RGBA PNG. Both stay in ignored private storage.
 
-## Visual composition
+## Logical-file integrity
 
-Approved composition:
+| Package entry | SHA-256 |
+|---|---|
+| `manifest.json` | `ccf84b1cb02716c1d0b5c9b830203d1399675a41aacedd02b2b52ac917bb01be` |
+| `assets/bottom_left_floral.png` | `f1f6e07d53bb34147e29e66847ef9ec75b565b4a27f3fed1fe66b128536e319d` |
+| `assets/bottom_right_floral.png` | `031fde58dff37b2854df2096367f841c221a38ecce60ff494e5d3e436d520ac7` |
+| `assets/photo_floral_frame.png` | `8d13590ccbbe36ae62f0e2108f7f944e0d2e164fb7d32a4f52a39d634d4d139a` |
+| `assets/photo_gold_rings.png` | `3e28304cf1f029d3b74a72df6dd4b4f122a24a61cc47b2549e9d7a861c013ea6` |
+| `assets/qr_frame.svg` | `1b96180158dfe49f10532331893f80945a240a444f55d04a87f43597205bc568` |
+| `assets/top_right_floral.png` | `fd494cce736a1fef0da9d20154497818c6618a8f234db34d374c0285b1f1c28d` |
+| `fonts/body_font.otf` | `de1eddf3f49fbc0782a1008a87053207f69174a3860f7068520ee4cd901ef926` |
+| `fonts/couple_script.ttf` | `9706c0bb3f05f576e5fe13abcad1bb5e27c76b0b0da055c94e2a2cd88c51bd5d` |
 
-- sage rounded QR treatment at top-left;
-- floral decoration at top-right;
-- centered oval/circular couple photo with gold-ring treatment and floral lower frame;
-- uppercase invitation heading;
-- large green script couple names;
-- rounded cream invitation panel;
-- guest name highlighted in green within mixed-style invitation text;
-- structured three-column date presentation;
-- venue/address/reception information;
-- floral decoration at the bottom corners/region.
+The package validator rejects extra, duplicate, absolute, traversal, undeclared,
+wrong-sized, or wrong-digest entries before rendering.
 
-## QR geometry from approved reference
+## Rendering contract
+
+The renderer accepts only the validated manifest, declared assets/fonts, closed
+placeholders, and supplied context. It supports generic text, asset, photo, QR,
+shape, and line layers with deterministic ordering and fitting. No renderer branch
+may inspect `template_key` to change composition.
+
+Approved composition includes the sage QR frame, top-right floral decoration,
+centered framed couple photo, uppercase invitation heading, green script couple
+names, cream invitation panel, highlighted guest name, three-column date block,
+venue/address details, and lower floral decoration.
+
+## QR geometry
 
 ```text
-QR decorative frame: x=63, y=70, width=232, height=232
-QR image:            x=80, y=87, width=198, height=198
-spacing:             17 px
-foreground:          #4f6f52
-background:          #fff8e7
-matrix reference:    33 × 33 at 6 px/module
-quiet zone:          4 modules (24 px)
+decorative frame: x=63, y=70, width=232, height=232
+QR image:         x=80, y=87, width=198, height=198
+spacing:          17 px
+foreground:       #4f6f52
+background:       #fff8e7
+matrix reference: 33 x 33 at 6 px/module
+quiet zone:       4 modules
 ```
 
-Styled QR must remain independently decodable.
+The preview QR uses only the non-resolving sentinel. Permanent cards use the
+protected image associated with the guest's active real credential, and the
+rendered QR must decode independently.
 
-## Photo geometry and controls
+## Photo and name controls
 
-```text
-PHOTO target: primary_photo
-x: 352
-y: 166
-width: 536
-height: 536
-```
+The primary photo target is `x=352`, `y=166`, `width=536`, `height=536` with an
+elliptical mask. Generic controls are `COVER` or `CONTAIN`, focus X/Y in `0..1`,
+and zoom in `1..3`; `CONTAIN` requires zoom `1.0`.
 
-Generic controls:
+Wedding Floral V10 applies display-only naming:
 
-- `photo_fit`: COVER or CONTAIN; default COVER
-- `photo_focus_x`: 0.0–1.0; default 0.5
-- `photo_focus_y`: 0.0–1.0; default 0.5
-- `photo_zoom`: 1.0–3.0; default 1.0
+- couple: first non-honorific token from each persisted name;
+- guest: first and final non-honorific tokens, or the single remaining token.
 
-Rules:
+Whitespace is normalized and leading `Mr`, `Mrs`, `Ms`, `Miss`, `Dr`, and `Prof`
+are ignored case-insensitively with an optional period. Original persisted names
+are not changed.
 
-- COVER fills/crops around focus and zoom;
-- CONTAIN preserves the whole image;
-- CONTAIN with zoom above 1.0 remains invalid unless the recovered final contract proves otherwise;
-- no face detection/AI cropping is required;
-- controls are generic manifest controls, not Wedding Floral conditionals.
+The manifest's closed placeholder set is `event.address`, `event.couple_names`,
+`event.date`, `event.primary_photo`, `event.time`, `event.venue`,
+`guest.full_name`, and `system.qr_image`. Contact data, notes, internal IDs, raw QR
+values, and hashes are not template inputs.
 
-## Placeholder/name contract
+## Provenance and publication
 
-Approved controlled placeholders include event, guest, and system values such as:
-
-```text
-event.couple_names
-event.date
-event.time
-event.venue
-event.address
-event.primary_photo
-guest.full_name
-guest.allowed_companions
-guest.table_number
-guest.category
-system.qr_image
-system.card_identifier
-```
-
-Do not expose guest email, phone, notes, internal IDs, raw QR token, or QR hash as template placeholders.
-
-Wedding Floral V10 applies a deterministic display-only naming policy in the
-card presentation layer:
-
-- bride/groom: first non-honorific name token only;
-- guest: first and final non-honorific name tokens, or the single token when
-  only one remains.
-
-The policy normalizes whitespace and ignores the common leading honorifics
-`Mr`, `Mrs`, `Ms`, `Miss`, `Dr`, and `Prof` (case-insensitive, with or without a
-trailing period). It preserves token spelling, casing, hyphens, and apostrophes.
-Persisted event and guest full names remain unchanged; no display-name columns
-are added.
-
-## Asset recovery hints
-
-The legacy private asset inventory previously included names similar to:
-
-```text
-right_top_line.svg
-top_right_floral.svg
-bottom_left_floral.svg
-bottom_right_floral.svg
-default_profile_placeholder.svg
-left_bottom_line.svg
-left_top_line.svg
-profile_ring_floral.svg
-qr_code_border.svg
-qr_code_template.svg
-right_bottom_line.svg
-```
-
-These names are search hints only. The recovered Version 10 manifest/package is authoritative.
-
-## Acceptance
-
-The rebuild has not preserved the design until:
-
-1. exact package hash is verified;
-2. logical file inventory matches;
-3. package validates under the new generic manifest validator;
-4. default deterministic preview matches the approved digest where environment/font rendering is intentionally identical;
-5. QR decodes correctly;
-6. representative portrait/landscape/square photo framing works;
-7. no template-specific renderer branch exists.
+Technical identity and staging acceptance do not establish copyright, font
+embedding, or redistribution permission. No licensing provenance is embedded in
+the nine-entry package. Until the owner separately confirms those rights, the
+archive, preview, six assets, two fonts, and generated cards must remain private,
+ignored, and excluded from publication. Public examples require separately
+licensed or synthetic replacements.

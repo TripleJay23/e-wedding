@@ -1,136 +1,128 @@
-# Wedding E-Card Backend — Clean Rebuild Foundation
+# Wedding E-Card Backend
 
-This repository is a clean backend-first rebuild of the wedding e-card and guest validation system.
+A secure FastAPI and PostgreSQL backend for managing a wedding event from guest
+ingestion through gate admission and reconciled reporting.
 
-The rebuild exists to finish the backend with a controlled milestone workflow, preserve the exact approved wedding-card design, eliminate implementation drift, and reach a tested `main` branch before Flutter work begins.
+## Release status
 
-## Core product flow
+Backend capabilities through reporting have completed the continuous staging
+acceptance journey. Repository cleanup and publication preparation are in progress.
+The repository has not been renamed or published, and Flutter work has not started.
 
-```text
-Admin login
-  → Create/configure wedding event
-  → Configure guest fields and event policies
-  → Upload Excel guest workbook
-  → Detect structure / map fields / validate rows
-  → Preview valid + invalid rows
-  → Import valid rows
-  → Correct invalid staged rows and revalidate
-  → Issue secure guest QR credentials
-  → Finalize the event card design
-  → Generate permanent personalized cards with real QR codes
-  → Scan at gate
-  → Record attendance and companions
-  → Correct attendance when authorized
-  → Produce reports and exports
-```
+## Capabilities
 
-## Technology
+- singleton administrator authentication with Argon2id and strict JWT validation;
+- wedding-event, guest-field, guest, and companion-policy management;
+- bounded XLSX inspection, deterministic header mapping, staged validation,
+  partial progression, correction, revalidation, duplicate handling, and history;
+- opaque high-entropy QR credentials with hash-at-rest and protected QR images;
+- exact, manifest-driven Wedding Floral V10 design verification, event-photo
+  controls, approval, permanent card generation, protected downloads, and export;
+- gate validation with wrong-event, unknown, inactive, superseded, duplicate, and
+  companion-limit outcomes;
+- immutable gate evidence with append-only attendance corrections;
+- shared, privacy-bounded JSON, CSV, and XLSX attendance reporting.
 
-- Backend: FastAPI / Python
-- Database: PostgreSQL for development, test, staging, and production-like verification
-- ORM/migrations: SQLAlchemy 2 / Alembic
-- Excel: openpyxl or equivalent safe XLSX processing
-- QR: secure random opaque credentials; hashes stored at rest
-- Card rendering: deterministic server-side image renderer driven by validated template manifests
-- Mobile: Flutter, only after backend acceptance is complete
-
-## Git workflow
+## Architecture
 
 ```text
-feature/* → dev → staging → main
+Future Flutter client
+        |
+        v
+FastAPI /api/v1
+        |
+        +-- PostgreSQL 17
+        +-- private workbook/photo/QR/card storage
+        +-- deterministic XLSX, QR, image, and report services
 ```
 
-- Feature branches are small and milestone-scoped.
-- `dev` is the integration branch.
-- `staging` is the full end-to-end acceptance branch.
-- `main` is the tested release branch.
-- Agents commit locally only unless the user explicitly authorizes remote operations.
+Routes are thin, transaction and domain rules live in services, persistence is
+isolated in repositories, and parsers/renderers are deterministic components.
+PostgreSQL is required for development, disposable integration tests, staging,
+and production.
 
-## Start here
-
-1. Read `AGENTS.md`.
-2. Read `docs/ProjectCharter.md`.
-3. Read `docs/Architecture.md`, `docs/Workflow.md`, and `docs/Milestones.md`.
-4. If rebuilding from the frozen legacy project, follow `MASTER_BOOTSTRAP_PROMPT.md` and `docs/LegacyRecovery.md`.
-5. Do not implement a milestone until its predecessor is accepted.
-
-## Important rule
-
-The frozen legacy project is evidence, not the new codebase. Reuse exact approved private template assets/packages and stable contracts where appropriate, but do not blindly copy legacy backend source or migrations.
-
-## Foundation development
-
-Prerequisites:
-
-- Python 3.12 or 3.13
-- [uv](https://docs.astral.sh/uv/)
-- Docker with Compose for the local PostgreSQL service
-
-Local setup:
-
-1. Copy `.env.example` to the ignored `.env` file and replace every `CHANGE_ME` value.
-2. Start PostgreSQL with `docker compose up -d postgres`.
-3. Run `uv sync --project backend --all-extras --locked`.
-4. Run the guarded baseline migration with
-   `uv run --project backend --env-file .env wedding-alembic upgrade head`.
-5. Start the application factory with
-   `uv run --project backend --env-file .env uvicorn app.main:create_app --factory`.
-
-The current M6 route surface includes health and authentication plus protected
-event CRUD/lifecycle, event guest-field configuration, manual guest foundation,
-bounded Excel import workflow endpoints, and metadata-only guest QR credential
-issuance/lifecycle endpoints, exact Wedding Floral V10 design/photo workflows, and
-private permanent-card generation/download/export. Gate validation, attendance,
-and reporting features remain intentionally absent.
-
-After applying the M2 migration, provision the one local development
-administrator with `ADMIN_BOOTSTRAP_USERNAME` and `ADMIN_BOOTSTRAP_PASSWORD`
-set only in the ignored environment file:
+## Repository structure
 
 ```text
-uv run --project backend --env-file .env wedding-bootstrap-admin
+backend/app/                 application, routes, services, repositories, models
+backend/alembic/             linear PostgreSQL migrations through 20260821_0008
+backend/tests/               unit/API/service and PostgreSQL integration tests
+docs/                        authoritative engineering and product contracts
+compose.yaml                 local development PostgreSQL 17
+compose.staging.yaml         isolated persistent staging PostgreSQL 17
 ```
 
-The command is development-only, refuses to overwrite an existing account,
-and requires a known authentication-compatible schema revision (currently M2,
-M3, M4, M5, or M6). Remove the bootstrap password from the local environment after
-provisioning succeeds.
+## Development setup
 
-Foundation verification:
+Prerequisites: Python 3.12 or 3.13, [uv](https://docs.astral.sh/uv/), Docker, and
+Docker Compose.
 
-```text
-uv run --project backend pytest
-uv run --project backend ruff check backend
-uv run --project backend ruff format --check backend
-uv run --project backend python -m compileall -q backend/app backend/tests backend/alembic
-```
+1. Copy `.env.example` to the ignored `.env` file and replace every `CHANGE_ME`
+   value.
+2. Start PostgreSQL:
 
-## Local staging runtime
+   ```text
+   docker compose up -d postgres
+   ```
 
-M10 uses a separate persistent PostgreSQL 17 runtime. Copy
-`.env.staging.example` to the ignored `.env.staging`, replace all placeholders,
-and follow [docs/Environment.md](docs/Environment.md). The bounded sequence is:
+3. Install the locked development environment:
 
-```text
-docker compose --env-file .env.staging -f compose.staging.yaml up -d postgres
-uv run --project backend --env-file .env.staging wedding-staging-alembic current
-uv run --project backend --env-file .env.staging wedding-staging-alembic upgrade head
-uv run --project backend --env-file .env.staging wedding-staging-alembic check
-uv run --project backend --env-file .env.staging wedding-staging-bootstrap-admin
-uv run --project backend --env-file .env.staging wedding-staging-rotate-admin-password
-uv run --project backend --env-file .env.staging uvicorn app.main:create_app --factory
-```
+   ```text
+   uv sync --project backend --all-extras --locked
+   ```
 
-The staging migration and administrator commands fail closed on any development,
-test, production, remote, wrongly named, or wrongly credentialed database target.
-Bootstrap creates the singleton administrator once; password rotation requires an
-environment-only replacement secret and the expected persisted administrator UUID,
-and never creates or overwrites an identity. Remove rotation inputs from the ignored
-staging environment after the command succeeds.
-Normal Compose `stop` preserves the M10 database; never use `down -v` during the
-continuous S1-S13 campaign.
+4. Apply the guarded migrations and provision the development administrator:
 
-Disposable migration commands require `APP_ENV=test`, an explicit local
-PostgreSQL URL, and a uniquely named database beginning with
-`wedding_ecard_disposable_`. Use `python -m app.cli.disposable_alembic`; never
-point a test command at development, staging, or production.
+   ```text
+   uv run --project backend --env-file .env wedding-alembic upgrade head
+   uv run --project backend --env-file .env wedding-bootstrap-admin
+   ```
+
+5. Remove `ADMIN_BOOTSTRAP_PASSWORD` from the local environment after successful
+   provisioning, then run the API:
+
+   ```text
+   uv run --project backend --env-file .env uvicorn app.main:create_app --factory
+   ```
+
+The guarded commands verify environment, host, database identity, and migration
+state. Disposable tests require an explicitly configured local database whose name
+starts with `wedding_ecard_disposable_`; they refuse development, staging, and
+production targets.
+
+## Quality gate
+
+The accepted release reference is 535 passed tests, 4 deliberate staging-only
+skips, and 91.12% branch-aware coverage. The repository also requires Ruff, format,
+compile, locked dependency, build/archive, Alembic lifecycle, Compose, privacy,
+secret, and documentation checks. See `docs/TestingStrategy.md`.
+
+## Security and privacy
+
+Never commit or publish real environment files, credentials, guest workbooks or
+PII, wedding photographs, database contents, QR artifacts, generated cards, report
+exports, or private template sources. Protected artifacts are served only through
+authenticated, event-scoped APIs. Raw QR credentials are never returned by
+management APIs, stored in PostgreSQL, or written to routine logs.
+
+## Private template provisioning
+
+Wedding Floral V10 is technically verified by immutable package, logical,
+manifest, and approved-preview digests. Its package, assets, and fonts remain in
+ignored private storage and must not be published unless redistribution rights are
+separately confirmed. A deployment must provision the verified private package
+before template registration and card-generation workflows can be used.
+
+## Flutter relationship
+
+The backend contract is designed for a future Flutter administrator and gate
+client. Flutter implementation remains a separate, later phase and must consume
+the accepted `/api/v1` contract without weakening backend security or privacy.
+
+## Documentation and license
+
+Start with `AGENTS.md`, then see `docs/Architecture.md`, `docs/API.md`,
+`docs/Environment.md`, `docs/Security.md`, and `docs/Workflow.md`.
+
+This repository is currently proprietary. It does not claim an open-source
+license; publication licensing is a separate owner decision recorded in `LICENSE`.

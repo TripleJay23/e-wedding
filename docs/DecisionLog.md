@@ -1,24 +1,27 @@
 # Locked Decision Log
 
-These decisions prevent repeated rediscovery and drift.
+These durable decisions prevent contract drift.
 
 | Decision | Status |
 |---|---|
-| Backend first; Flutter only after backend acceptance | LOCKED |
-| FastAPI / Python backend | LOCKED |
-| PostgreSQL retained across dev/test/staging | LOCKED |
-| Git flow `feature/* → dev → staging → main` | LOCKED |
-| Agents commit locally; no push without explicit user authorization | LOCKED |
-| Main staging story is Jordan & Jessica wedding | LOCKED |
-| Default max companions per invitation = 2 | LOCKED |
-| Valid Excel rows may be imported while invalid rows remain staged | LOCKED |
-| Invalid staged Excel rows require in-app/backend correction + revalidation | LOCKED |
-| Formulas are never evaluated during Excel import | LOCKED |
-| Exact approved Wedding Floral V10 design must be preserved | LOCKED |
-| Generic manifest-driven renderer; no template-specific rendering code | LOCKED |
-| Preview QR synthetic/non-resolving | LOCKED |
-| Permanent cards use real secure guest QR credential | LOCKED |
-| Raw QR token never stored; only hash at rest | LOCKED |
-| M5 stores the protected QR image; M6 consumes it without raw-token recovery | LOCKED |
-| Docs fully reconciled after staging acceptance, before main | LOCKED |
-| Old/frozen repository is evidence; new backend code is rebuilt cleanly | LOCKED |
+| Backend is complete through reports and the full staging release gate | ACCEPTED |
+| Flutter is a separate later phase | LOCKED |
+| FastAPI/Python backend with PostgreSQL 17 across environments | LOCKED |
+| Git flow is `feature/* -> dev -> staging -> main`; remote operations require explicit authorization | LOCKED |
+| MVP has one active persisted `SUPER_ADMIN` | LOCKED |
+| Default maximum companions per invitation is 2 | LOCKED |
+| Excel mapping is deterministic; formulas are never executed | LOCKED |
+| Valid rows may progress while invalid rows remain staged | LOCKED |
+| Exact selected-row progression is atomic; imported selections are idempotent | LOCKED |
+| Original import evidence is preserved; corrections and revalidation are versioned | LOCKED |
+| Wedding Floral V10 is preserved by exact digests, not recreated | LOCKED |
+| Renderer behavior is generic and manifest-driven | LOCKED |
+| Wedding Floral package/assets/fonts remain private until redistribution rights are confirmed | OPEN PUBLICATION DECISION |
+| Preview QR is synthetic; permanent cards use real issued QR images | LOCKED |
+| Raw QR value is not stored; PostgreSQL stores only its verifier hash | LOCKED |
+| Gate evidence is immutable and attendance corrections are append-only | LOCKED |
+| Effective attendance is derived from gate evidence plus the correction chain | LOCKED |
+| JSON/CSV/XLSX reports share one privacy-bounded dataset | LOCKED |
+| Alembic is one clean linear history through `20260821_0008`; no inherited migration chain | LOCKED |
+| Development/staging database identities remain operational guardrails, not branding strings | LOCKED |
+| Repository name, public license, and synthetic publication assets require later owner decisions | OPEN PUBLICATION DECISION |

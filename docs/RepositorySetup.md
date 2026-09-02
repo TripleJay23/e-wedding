@@ -1,46 +1,45 @@
-# Repository Setup Contract
+# Repository Setup
 
-The implementation agent creates the actual repository locally.
+## Prerequisites
 
-## Required initial branches
+- Git
+- Python 3.12 or 3.13
+- `uv`
+- Docker with Compose
+- local PostgreSQL 17 through the tracked Compose configuration
+
+## Branch model
 
 ```text
-main
-staging
-dev
+feature/* -> dev -> staging -> main
 ```
 
-Initial foundation work occurs on `feature/repository-foundation` from `dev` after the clean initial branch graph is established.
+New work starts from accepted `dev`. The user controls remote configuration and
+publication; local setup must not invent or modify remotes.
 
-## Root files
+## Tracked foundation
 
-Required:
+The repository retains root documentation and policy files, environment examples,
+Compose definitions, `pytest.ini`, the `backend/app` package, eight linear Alembic
+migrations, all tests, `backend/pyproject.toml`, and `backend/uv.lock`.
 
-- README.md
-- AGENTS.md
-- LICENSE
-- .gitignore
-- .gitattributes
-- .editorconfig
-- .env.example
+Create local environment files only by copying the examples. Keep all real values
+ignored. Development setup and commands are documented in `README.md` and
+`docs/Environment.md`.
 
-## Backend foundation files to create during M1
+## Private local state
 
-- dependency/project metadata (`pyproject.toml` preferred)
-- application package
-- tests
-- Alembic configuration
-- Docker/PostgreSQL local setup where useful
-- lint/format/test configuration
-
-Do not invent implementation code during M0 recovery.
-
-## Private local folders
-
-Create only when needed and keep ignored:
+These paths or equivalents remain untracked:
 
 ```text
+.env
+.env.staging
+backend/.env
 backend/storage/private/
 backend/backups/
-backend/.env
 ```
+
+Do not place real guest data, photos, template sources/fonts, QR artifacts,
+generated cards, report exports, dumps, or backups in tracked sample directories.
+Only separately approved synthetic or appropriately licensed public examples may
+be committed under `assets/`.

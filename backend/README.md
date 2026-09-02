@@ -1,43 +1,35 @@
 # Backend
 
-FastAPI backend for the wedding e-card and guest validation system.
+FastAPI application, PostgreSQL migrations, and automated tests for the wedding
+e-card and guest-validation backend.
 
-Implementation must follow the root `AGENTS.md` and `docs/` milestone plan.
-
-Do not start Flutter/mobile work from this directory.
-
-## Foundation commands
-
-From the repository root:
+Run commands from the repository root:
 
 ```text
 uv sync --project backend --all-extras --locked
 uv run --project backend --env-file .env wedding-alembic current
 uv run --project backend --env-file .env wedding-alembic upgrade head
+uv run --project backend --env-file .env wedding-alembic check
 uv run --project backend --env-file .env wedding-bootstrap-admin
+uv run --project backend --env-file .env uvicorn app.main:create_app --factory
 uv run --project backend pytest
 uv run --project backend ruff check backend
 uv run --project backend ruff format --check backend
+uv run --project backend python -m compileall -q backend/app backend/tests backend/alembic
 ```
 
-Run the API through its factory:
+The application includes authentication, events and guests, complete staged Excel
+imports, QR lifecycle, template/photo/design/card workflows, gate attendance,
+append-only corrections, and JSON/CSV/XLSX reports.
 
-```text
-uv run --project backend --env-file .env uvicorn app.main:create_app --factory
-```
+Use `wedding-alembic` only for guarded development migration operations. Use
+`wedding-disposable-alembic` with `APP_ENV=test` and an explicitly named local
+`wedding_ecard_disposable_*` database for disposable integration work. Staging
+uses the dedicated `wedding-staging-*` operators described in
+`../docs/Environment.md`; ordinary development and test commands refuse it.
 
-The Alembic environment intentionally refuses direct, unverified connections.
-Use `wedding-alembic` for development and read-only staging checks. Use
-`python -m app.cli.disposable_alembic` only with a guarded disposable PostgreSQL
-database and `APP_ENV=test`.
+`wedding-bootstrap-admin` creates the development singleton once and never
+overwrites it. Remove its environment-only password after successful provisioning.
+Private workbook, photo, template, QR, card, and report artifacts stay outside Git.
 
-`wedding-bootstrap-admin` is a one-time, development-only command. It reads the
-administrator password from `ADMIN_BOOTSTRAP_PASSWORD`, never prints or
-overwrites it, and should be run only after the guarded migration reaches a
-known authentication-compatible revision (currently M2, M3, M4, M5, M6, or M7). Remove that
-password from the ignored local environment after the account is provisioned.
-
-The canonical local staging runtime is documented in `../docs/Environment.md`.
-It uses `.env.staging`, `../compose.staging.yaml`, `wedding-staging-alembic`, and
-`wedding-staging-bootstrap-admin`. These dedicated commands do not weaken the
-development-only bootstrap or ordinary staging-mutation refusal.
+Repository-wide engineering controls are in `../AGENTS.md`.

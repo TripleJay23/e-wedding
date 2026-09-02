@@ -1,99 +1,77 @@
-# Security Plan
+# Security Contract
 
-## Authentication
+## Authentication and secrets
 
-- Argon2id password hashes
-- strong secret from environment
-- short-lived JWT access token
-- issuer/audience checks
-- persisted active-user reload
-- protected admin routes require `SUPER_ADMIN`
+- one persisted active `SUPER_ADMIN` for the MVP;
+- Argon2id password hashes and strict shared password policy;
+- short-lived JWTs with subject, issuer, audience, issued-at, and expiry checks;
+- active administrator reloaded from PostgreSQL on protected requests;
+- secrets accepted only from explicitly selected environment configuration;
+- passwords, hashes, database URLs, JWT secrets, and submitted values excluded
+  from routine output, logs, and configuration errors.
 
-## Secrets
+Bootstrap creates an administrator once and never overwrites it. The staging
+rotation operator requires the expected persisted UUID, locks the row, rejects a
+same-password replacement, and changes only the hash and normal update timestamp.
 
-Never commit `.env` or real secret values.
+## PostgreSQL isolation
 
-Rotate credentials if accidental exposure occurs.
+Development, disposable test, staging, and production identities are separate.
+Guarded migration operators verify environment, local/allowed host, configured and
+connected database/user identity, PostgreSQL version where required, current
+revision, sole head, and explicit authorization before mutation. Disposable tools
+refuse development, staging, production, remote, and ambiguously named targets.
 
-The staging administrator is provisioned once. Existing-account password rotation
-uses the dedicated staging-only operator with an expected UUID guard, row lock, and
-the shared Argon2id password policy; bootstrap never overwrites the account.
+## Private data and artifacts
 
-## Excel uploads
+Guest names, contact data, workbook rows, attendance, event details, photos,
+template sources, QR images, generated cards, and database contents are private.
+Workbook evidence, canonical photos, verified templates, QR PNGs, and permanent
+cards live under server-controlled private roots and are accessed only through
+authenticated, event-scoped services. Storage keys are internal and traversal is
+rejected. Uploaded photos are decoded, bounded, canonicalized, and stripped of
+metadata before persistence.
 
-- allow only supported XLSX package type
-- bounded byte size
-- inspect actual ZIP/package structure
-- protect against decompression bombs/path tricks
-- never execute formulas/macros
-- do not trust file extension alone
-- keep uploaded bytes private
-- expose row data only to authorized admin
+## Excel security
 
-## Guest data
+The importer validates actual XLSX ZIP structure, bounds compressed and expanded
+content, rejects unsafe relationships/features and path tricks, loads formulas as
+formulas with `data_only=False`, and never evaluates them. Ambiguous mapping fails
+closed. Malformed genuine rows remain visible to the administrator; errors and
+logs do not disclose row values.
 
-PII is private:
+## QR security
 
-- names
-- emails
-- phone numbers
-- notes
-- attendance
-- wedding/event information where private
+Credentials are cryptographically random, opaque, high entropy, and contain no
+PII. The raw value exists only inside issuance/rendering or a presented scan
+request. PostgreSQL stores only a normalized lowercase SHA-256 verifier; the QR
+image is protected private data. Management responses never expose the raw value,
+hash, image key, or image content. Event/guest binding, active/inactive/superseded
+states, reissue semantics, wrong-event rejection, and duplicate admission are
+enforced.
 
-Use privacy-safe logs and test reports.
+## Attendance and correction integrity
 
-## QR
+Successful gate attendance and meaningful scan attempts are immutable evidence.
+Companion admission is rechecked against current guest/event policy in the scan
+transaction. Corrections never rewrite gate truth: they are append-only,
+administrator-attributed revisions using optimistic expectations and closed
+decisions. Sensitive reason notes are returned only by the dedicated audit-detail
+surface.
 
-- cryptographically secure opaque tokens
-- no PII in payload
-- hash-at-rest
-- constant-time/safe comparison where relevant
-- lifecycle active/inactive/reissue
-- render the credential into a protected private QR image before discarding it
-- metadata-only management API; never expose the raw token, hash, or storage key
-- duplicate attendance protection
+## Report privacy
 
-## File storage
+JSON, CSV, and XLSX share one read-only bounded dataset. Exports use an explicit
+identifier/state/count allowlist and exclude names, email, phone, notes,
+table/category, QR/card details, correction notes, and actor identities. CSV/XLSX
+cells are neutralized against formula injection. Private responses use
+non-cacheable headers.
 
-Private storage only.
+## Git and publication boundary
 
-Prevent path traversal.
-
-Use content-addressed or deterministic verified storage where appropriate.
-
-Strip image metadata before canonical event-photo storage.
-
-## Template assets
-
-Private source assets/fonts remain ignored unless licensing/redistribution is explicitly confirmed.
-
-Do not make the repo public until asset/font rights are verified.
-
-## Generated cards
-
-Generated cards are private event artifacts and must not be publicly guessable.
-
-## Staging safety
-
-Before staging migrations:
-
-- verify DB identity from connected server
-- fresh backup
-- active-writer check
-- current/target Alembic revision
-- controlled migration
-- post-migration verification
-
-Disposable DB helper must refuse staging/production names.
-
-## Git audit
-
-Before each accepted commit/release:
-
-- inspect tracked files
-- ensure no `.env`
-- no private spreadsheets/photos
-- no dumps/backups
-- no generated cards
-- no template private package unless explicitly approved
+Never commit or publish real `.env` files, secrets, guest workbooks/exports,
+photos, databases/dumps/backups, QR artifacts, generated cards, or private template
+packages/assets/fonts. Committed fixtures are synthetic. Wedding Floral V10 is
+technically verified but remains private unless redistribution and font rights are
+explicitly confirmed. Repository history and build archives must be audited before
+publication.

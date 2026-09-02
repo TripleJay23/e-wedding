@@ -1,56 +1,51 @@
 # Testing Strategy
 
-## Test pyramid
+## Test topology
 
-### Unit
+- unit tests cover parsers, normalizers, validators, reducers, security helpers,
+  QR primitives, renderers, and export encoders;
+- API tests cover authentication, authorization, validation, privacy headers,
+  bounded routes, and safe errors;
+- service/repository tests cover transactions, query shape, event scoping,
+  optimistic concurrency, idempotency, and rollback;
+- PostgreSQL integration tests cover real constraints, migrations, concurrency,
+  storage boundaries, and complete feature behavior;
+- staging acceptance preserves one continuous product journey through reports.
 
-Pure parsers, validators, reducers, renderers, security helpers.
+The repository contains 52 test modules plus `conftest.py`: 41 regular modules and
+11 opt-in PostgreSQL integration modules.
 
-### Service/repository
+## Database safety
 
-PostgreSQL-backed business rules and transactions.
+Integration acceptance uses a fresh local PostgreSQL 17 database named
+`wedding_ecard_disposable_*` with `APP_ENV=test` and isolated private storage.
+The guard must refuse development, `wedding_ecard_staging`, production, remote,
+and missing or ambiguous targets. Canonical staging is never a test fallback.
 
-### API
+## Release quality gate
 
-Authentication, authorization, HTTP contracts, privacy headers, concurrency.
+The accepted reference is 535 passed tests, 4 deliberate staging-only skips, and
+91.12% branch-aware coverage. Release-impacting changes require:
 
-### Migration
+- focused and complete backend tests with at least 90% branch-aware coverage;
+- Ruff lint and format checks;
+- application/test/migration compilation and configured static checks;
+- locked dependency sync and `uv lock --check`;
+- wheel and sdist builds with archive inspection;
+- Alembic upgrade/current/heads/check and one-revision downgrade/re-upgrade;
+- Compose parse/configuration validation;
+- private-file, secret-pattern, PII, and documentation-reference audits.
 
-Upgrade/downgrade where supported, fresh install, PostgreSQL DDL, Alembic check.
+## Privacy and fixtures
 
-### End-to-end staging
+Committed fixtures contain only synthetic data. Real guest workbooks, photos,
+template packages/fonts, QR images, generated cards, exports, database contents,
+and evidence remain ignored. Test reports use aggregate results and never disclose
+private rows or secrets.
 
-Continuous Jordan & Jessica scenario.
+## Staging regression
 
-## Database testing
-
-Use disposable PostgreSQL databases with hard guards.
-
-A disposable command must refuse:
-
-- `wedding_ecard_staging`
-- production database names
-- non-local target unless explicitly allowed
-- missing `APP_ENV=test`
-
-## Regression gate
-
-Every feature commit requires:
-
-- focused tests
-- impacted regressions
-- lint/format
-- compile/type checks where configured
-- complete backend suite before acceptance
-
-## Privacy
-
-Committed fixtures must be synthetic.
-
-Real Excel files and wedding photos are staging/private evidence only.
-
-## Staging acceptance
-
-Staging is not just a test suite. It proves the real product journey.
-
-A PASS report must include continuity, expected vs observed behavior, and the next exact checkpoint.
+Staging is not replaced by unit or disposable integration tests. A staging PASS
+must identify the existing event, continue the same accepted scenario, compare
+expected and observed behavior, preserve protected storage/database state, and
+name the exact next checkpoint.
