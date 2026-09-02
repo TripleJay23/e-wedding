@@ -21,6 +21,7 @@ from app.models.imports import (
     ImportBatch,
     ImportBatchRow,
     ImportBatchStatus,
+    ImportRevisionKind,
     ImportRowStatus,
 )
 from app.services.guest_validation import error, guest_identity_fingerprints
@@ -762,7 +763,7 @@ def test_correction_is_optimistic_preserves_origin_and_requires_explicit_revalid
     assert corrected.row_version == 2
     assert len(imports.revisions) == 1
 
-    with pytest.raises(ImportConflictError, match="only invalid"):
+    with pytest.raises(ImportConflictError, match="only valid, invalid, or duplicate"):
         service.correct_row(
             events.event.id,
             batch.id,
@@ -771,6 +772,256 @@ def test_correction_is_optimistic_preserves_origin_and_requires_explicit_revalid
             expected_version=2,
             values={"email": "another@example.test"},
         )
+
+
+def test_valid_unlinked_correction_requires_revalidation_and_preserves_restore_history() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event, status=ImportBatchStatus.PARTIALLY_IMPORTED)
+    original = guest_values("Editable Preview", email="editable@example.test", companions=1)
+    imported = make_staged_row(
+        batch,
+        2,
+        guest_values("Already Imported", email="imported@example.test"),
+        status=ImportRowStatus.IMPORTED,
+    )
+    imported_guest_id = uuid4()
+    imported.guest_id = imported_guest_id
+    target = make_staged_row(batch, 3, original, status=ImportRowStatus.VALID)
+    batch.candidate_row_count = 2
+    imports.add_batch(batch, [imported, target])
+
+    first = service.correct_row(
+        events.event.id,
+        batch.id,
+        target.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"allowed_companions": 3},
+    )
+
+    assert first.status == ImportRowStatus.PENDING_REVALIDATION
+    assert first.row_version == 2
+    assert first.current_values["allowed_companions"] == 3
+    assert first.original_values == original
+    assert first.guest_id is None
+    assert batch.status == ImportBatchStatus.PARTIALLY_IMPORTED
+    assert len(imports.revisions) == 1
+    assert imports.revisions[0].kind == ImportRevisionKind.CORRECTION
+
+    with pytest.raises(ImportConflictError, match="non-progressable"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[target.id],
+        )
+    assert guests.items == []
+    assert target.guest_id is None
+
+    invalid = service.revalidate_row(
+        events.event.id,
+        batch.id,
+        target.id,
+        administrator_id=events.event.created_by,
+    )
+    assert invalid.status == ImportRowStatus.INVALID
+    assert invalid.row_version == 3
+    assert [item["code"] for item in invalid.validation_errors] == ["COMPANION_LIMIT_EXCEEDED"]
+    assert [revision.kind for revision in imports.revisions] == [
+        ImportRevisionKind.CORRECTION,
+        ImportRevisionKind.REVALIDATION,
+    ]
+
+    with pytest.raises(ImportConflictError, match="stale"):
+        service.correct_row(
+            events.event.id,
+            batch.id,
+            target.id,
+            administrator_id=events.event.created_by,
+            expected_version=1,
+            values={"allowed_companions": original["allowed_companions"]},
+        )
+    assert target.row_version == 3
+    assert len(imports.revisions) == 2
+
+    restored = service.correct_row(
+        events.event.id,
+        batch.id,
+        target.id,
+        administrator_id=events.event.created_by,
+        expected_version=3,
+        values={"allowed_companions": original["allowed_companions"]},
+    )
+    assert restored.status == ImportRowStatus.PENDING_REVALIDATION
+    assert restored.row_version == 4
+    assert restored.current_values == original
+
+    final = service.revalidate_row(
+        events.event.id,
+        batch.id,
+        target.id,
+        administrator_id=events.event.created_by,
+    )
+    assert final.status == ImportRowStatus.VALID
+    assert final.validation_errors == []
+    assert final.row_version == 5
+    assert final.current_values == original
+    assert final.original_values == original
+    assert final.guest_id is None
+    assert imported.status == ImportRowStatus.IMPORTED
+    assert imported.guest_id == imported_guest_id
+    assert batch.status == ImportBatchStatus.PARTIALLY_IMPORTED
+    assert [revision.kind for revision in imports.revisions] == [
+        ImportRevisionKind.CORRECTION,
+        ImportRevisionKind.REVALIDATION,
+        ImportRevisionKind.CORRECTION,
+        ImportRevisionKind.REVALIDATION,
+    ]
+
+
+def test_valid_to_valid_correction_still_invalidates_prior_validation_evidence() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    row = make_staged_row(
+        batch,
+        2,
+        guest_values("Still Valid", email="still-valid@example.test"),
+        status=ImportRowStatus.VALID,
+    )
+    batch.candidate_row_count = 1
+    imports.add_batch(batch, [row])
+
+    service.correct_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"category": "Synthetic Category"},
+    )
+    assert row.status == ImportRowStatus.PENDING_REVALIDATION
+    with pytest.raises(ImportConflictError, match="non-progressable"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[row.id],
+        )
+    assert guests.items == []
+
+    service.revalidate_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+    )
+    assert row.status == ImportRowStatus.VALID
+    assert row.validation_errors == []
+    assert row.guest_id is None
+
+
+def test_valid_unlinked_noop_correction_does_not_advance_history() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    row = make_staged_row(
+        batch,
+        2,
+        guest_values("No-op Preview", email="noop@example.test", companions=1),
+        status=ImportRowStatus.VALID,
+    )
+    batch.candidate_row_count = 1
+    imports.add_batch(batch, [row])
+
+    with pytest.raises(ImportConflictError, match="change at least one"):
+        service.correct_row(
+            events.event.id,
+            batch.id,
+            row.id,
+            administrator_id=events.event.created_by,
+            expected_version=1,
+            values={"allowed_companions": 1},
+        )
+
+    assert row.status is ImportRowStatus.VALID
+    assert row.row_version == 1
+    assert imports.revisions == []
+
+
+def test_duplicate_unlinked_row_correction_regression_revalidates_to_valid() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    original = guest_values("Duplicate Preview", email="duplicate@example.test")
+    row = make_staged_row(
+        batch,
+        2,
+        original,
+        status=ImportRowStatus.DUPLICATE,
+        errors=[error(None, "DUPLICATE_IN_WORKBOOK", "duplicate")],
+    )
+    batch.candidate_row_count = 1
+    imports.add_batch(batch, [row])
+
+    service.correct_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"email": "unique@example.test"},
+    )
+    assert row.status is ImportRowStatus.PENDING_REVALIDATION
+    assert row.original_values == original
+
+    service.revalidate_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+    )
+    assert row.status is ImportRowStatus.VALID
+    assert row.validation_errors == []
+    assert row.row_version == 3
+    assert row.guest_id is None
+
+
+@pytest.mark.parametrize("status", [ImportRowStatus.IMPORTED, ImportRowStatus.VALID])
+def test_imported_or_guest_linked_rows_cannot_be_corrected(status: ImportRowStatus) -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event, status=ImportBatchStatus.PARTIALLY_IMPORTED)
+    row = make_staged_row(
+        batch,
+        2,
+        guest_values("Protected", email="protected@example.test"),
+        status=status,
+    )
+    row.guest_id = uuid4()
+    batch.candidate_row_count = 1
+    imports.add_batch(batch, [row])
+    original = dict(row.current_values)
+
+    with pytest.raises(ImportConflictError, match="imported or guest-linked"):
+        service.correct_row(
+            events.event.id,
+            batch.id,
+            row.id,
+            administrator_id=events.event.created_by,
+            expected_version=1,
+            values={"allowed_companions": 2},
+        )
+
+    assert row.current_values == original
+    assert row.row_version == 1
+    assert imports.revisions == []
 
 
 def test_unfixed_normalization_error_survives_correction_and_revalidation() -> None:

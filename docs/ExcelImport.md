@@ -112,12 +112,15 @@ An explicit empty selection never means "import all."
 
 Required capability:
 
-- admin retrieves invalid row and errors
-- admin edits one or more canonical staged values
+- admin retrieves an unlinked preview row and its current validation state
+- admin edits one or more canonical staged values while the row is `VALID`, `INVALID`, or
+  `DUPLICATE`
 - optimistic version check prevents stale overwrite
 - original imported snapshot remains auditable
+- every effective correction becomes non-progressable until explicit revalidation completes
 - corrected state is revalidated under the same or explicitly refreshed policy snapshot
 - once eligible, row can be confirmed/imported
+- imported or guest-linked staged rows cannot be corrected through the import staging surface
 - previously imported rows are never duplicated
 
 The mobile app will later expose this as an edit/fix flow in the Import Preview screen.

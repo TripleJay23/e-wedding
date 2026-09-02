@@ -239,10 +239,18 @@ class ImportService:
         """Version a permitted correction without mutating original workbook evidence."""
         batch = self._require_locked_batch(event_id, batch_id)
         row = self._require_locked_row(event_id, batch_id, row_id)
-        if row.status not in {ImportRowStatus.INVALID, ImportRowStatus.DUPLICATE}:
-            raise ImportConflictError("only invalid or duplicate staged rows may be corrected")
         if row.row_version != expected_version:
             raise ImportConflictError("staged row version is stale")
+        if row.guest_id is not None or row.status == ImportRowStatus.IMPORTED:
+            raise ImportConflictError("imported or guest-linked staged rows may not be corrected")
+        if row.status not in {
+            ImportRowStatus.VALID,
+            ImportRowStatus.INVALID,
+            ImportRowStatus.DUPLICATE,
+        }:
+            raise ImportConflictError(
+                "only valid, invalid, or duplicate unlinked staged rows may be corrected"
+            )
 
         normalized_patch = _normalize_correction_patch(values)
         current_values = dict(row.current_values)

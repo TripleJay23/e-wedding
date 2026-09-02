@@ -56,7 +56,11 @@ Required capabilities:
 - confirm newly eligible rows without duplicating previously imported guests
 - list import history
 
-The correction endpoints are required before Excel milestone completion.
+The correction endpoints are required before Excel milestone completion. The staged-row
+correction route accepts effective edits to unlinked `VALID`, `INVALID`, and `DUPLICATE` preview
+rows with an optimistic `expected_version`. Every accepted edit moves the row to a
+non-progressable pending-revalidation state, even when the new values may still be valid.
+Imported or guest-linked staged rows remain non-correctable through this surface.
 
 `POST /api/v1/events/{event_id}/imports/{batch_id}/progress` preserves batch-wide
 progression when called without a body. An optional body containing a non-empty,

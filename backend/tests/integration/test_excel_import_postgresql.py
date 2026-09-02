@@ -26,7 +26,14 @@ from app.models.attendance_corrections import GuestAttendanceCorrection
 from app.models.cards import GeneratedGuestCard
 from app.models.event import Event
 from app.models.guest import Guest
-from app.models.imports import ImportBatch, ImportBatchRow, ImportRowRevision, ImportRowStatus
+from app.models.imports import (
+    ImportBatch,
+    ImportBatchRow,
+    ImportBatchStatus,
+    ImportRevisionKind,
+    ImportRowRevision,
+    ImportRowStatus,
+)
 from app.models.qr import GuestQrCredential
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
@@ -1074,6 +1081,498 @@ def test_m4_schema_api_correction_reimport_and_immutability(
         evidence_files = list(settings.IMPORT_EVIDENCE_STORAGE_ROOT.rglob("*.xlsx"))
         assert len(evidence_files) == 10
         assert all("synthetic.xlsx" not in path.name for path in evidence_files)
+    finally:
+        runtime.close()
+        if administrator_id is not None:
+            with Session(engine) as session:
+                events = list(
+                    session.execute(
+                        select(Event).where(Event.created_by == administrator_id)
+                    ).scalars()
+                )
+                event_ids = [event.id for event in events]
+                if event_ids:
+                    session.execute(delete(ImportBatch).where(ImportBatch.event_id.in_(event_ids)))
+                for event in events:
+                    session.delete(event)
+                session.flush()
+                administrator = session.get(Administrator, administrator_id)
+                if administrator is not None:
+                    session.delete(administrator)
+                session.commit()
+        engine.dispose()
+
+
+async def exercise_valid_row_correction_api(
+    settings: Settings,
+    runtime: DatabaseRuntime,
+    username: str,
+) -> dict[str, object]:
+    app = create_app(
+        settings,
+        database_runtime=runtime,
+        authentication_security=AuthenticationSecurity.from_settings(settings),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://synthetic.test") as client,
+    ):
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "synthetic administrator password"},
+        )
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        event_payload = {
+            "bride_name": "Synthetic",
+            "groom_name": "Correction",
+            "event_datetime": "2027-06-12T14:30:00+03:00",
+            "venue": "Synthetic Hall",
+            "max_companions_per_invitation": 2,
+        }
+
+        async def create_event(name: str) -> str:
+            response = await client.post(
+                "/api/v1/events",
+                headers=headers,
+                json={**event_payload, "event_name": name},
+            )
+            assert response.status_code == 201, response.text
+            return str(response.json()["id"])
+
+        async def upload(
+            event_id: str, count: int, prefix: str
+        ) -> tuple[str, list[dict[str, object]]]:
+            response = await client.post(
+                f"/api/v1/events/{event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        f"synthetic-{prefix.casefold()}.xlsx",
+                        selectable_workbook(count, prefix),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert response.status_code == 201, response.text
+            batch_id = str(response.json()["id"])
+            staged = await client.get(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=100",
+                headers=headers,
+            )
+            assert staged.status_code == 200
+            return batch_id, staged.json()["items"]
+
+        main_event = await create_event("Synthetic Valid Row Correction")
+        main_batch, main_rows = await upload(main_event, 20, "ValidCorrection")
+        initial_values = dict(main_rows[5]["current_values"])  # type: ignore[arg-type]
+        first_five_ids = [str(row["id"]) for row in main_rows[:5]]
+        progressed = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/progress",
+            headers=headers,
+            json={"staged_row_ids": first_five_ids},
+        )
+        assert progressed.status_code == 200
+        assert progressed.json()["imported_rows"] == 5
+        assert progressed.json()["reconciliation"]["currently_valid_staged_rows"] == 15
+        target_id = str(main_rows[5]["id"])
+
+        first_correction = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}",
+            headers=headers,
+            json={"expected_version": 1, "values": {"allowed_companions": 3}},
+        )
+        assert first_correction.status_code == 200, first_correction.text
+        assert first_correction.json()["status"] == "PENDING_REVALIDATION"
+        assert first_correction.json()["row_version"] == 2
+        assert first_correction.json()["original_values"] == initial_values
+        assert first_correction.json()["guest_id"] is None
+
+        premature_progress = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/progress",
+            headers=headers,
+            json={"staged_row_ids": [target_id]},
+        )
+        assert premature_progress.status_code == 409
+        guests_before_revalidation = await client.get(
+            f"/api/v1/events/{main_event}/guests?limit=100",
+            headers=headers,
+        )
+        assert guests_before_revalidation.status_code == 200
+        assert len(guests_before_revalidation.json()["items"]) == 5
+
+        invalid = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}/revalidate",
+            headers=headers,
+        )
+        assert invalid.status_code == 200, invalid.text
+        assert invalid.json()["status"] == "INVALID"
+        assert invalid.json()["row_version"] == 3
+        assert [item["code"] for item in invalid.json()["validation_errors"]] == [
+            "COMPANION_LIMIT_EXCEEDED"
+        ]
+
+        stale = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}",
+            headers=headers,
+            json={
+                "expected_version": 1,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        assert stale.status_code == 409
+        assert "stale" in stale.text
+
+        missing_auth = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}",
+            json={
+                "expected_version": 3,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        invalid_auth = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}/revalidate",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+        assert missing_auth.status_code == invalid_auth.status_code == 401
+
+        second_event = await create_event("Synthetic Wrong Scope Correction")
+        wrong_event = await client.patch(
+            f"/api/v1/events/{second_event}/imports/{main_batch}/rows/{target_id}",
+            headers=headers,
+            json={
+                "expected_version": 3,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        wrong_batch = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{uuid4()}/rows/{target_id}",
+            headers=headers,
+            json={
+                "expected_version": 3,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        wrong_row = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{uuid4()}",
+            headers=headers,
+            json={
+                "expected_version": 3,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        assert wrong_event.status_code == wrong_batch.status_code == wrong_row.status_code == 404
+
+        restored = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}",
+            headers=headers,
+            json={
+                "expected_version": 3,
+                "values": {"allowed_companions": initial_values["allowed_companions"]},
+            },
+        )
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["status"] == "PENDING_REVALIDATION"
+        assert restored.json()["row_version"] == 4
+        final_target = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{target_id}/revalidate",
+            headers=headers,
+        )
+        assert final_target.status_code == 200, final_target.text
+        assert final_target.json()["status"] == "VALID"
+        assert final_target.json()["validation_errors"] == []
+        assert final_target.json()["row_version"] == 5
+        assert final_target.json()["current_values"] == initial_values
+        assert final_target.json()["original_values"] == initial_values
+        assert final_target.json()["guest_id"] is None
+
+        imported_refusal = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{main_rows[0]['id']}",
+            headers=headers,
+            json={"expected_version": 1, "values": {"category": "Protected Attempt"}},
+        )
+        assert imported_refusal.status_code == 409
+        assert "imported or guest-linked" in imported_refusal.text
+
+        valid_to_valid_id = str(main_rows[6]["id"])
+        valid_to_valid = await client.patch(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{valid_to_valid_id}",
+            headers=headers,
+            json={"expected_version": 1, "values": {"category": "Colleagues"}},
+        )
+        assert valid_to_valid.status_code == 200
+        assert valid_to_valid.json()["status"] == "PENDING_REVALIDATION"
+        blocked_valid_to_valid = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/progress",
+            headers=headers,
+            json={"staged_row_ids": [valid_to_valid_id]},
+        )
+        assert blocked_valid_to_valid.status_code == 409
+        revalidated_valid_to_valid = await client.post(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows/{valid_to_valid_id}/revalidate",
+            headers=headers,
+        )
+        assert revalidated_valid_to_valid.status_code == 200
+        assert revalidated_valid_to_valid.json()["status"] == "VALID"
+
+        persisted_event = await create_event("Synthetic Persisted Duplicate Correction")
+        persisted_batch, persisted_rows = await upload(persisted_event, 2, "PersistedDuplicate")
+        persisted_progress = await client.post(
+            f"/api/v1/events/{persisted_event}/imports/{persisted_batch}/progress",
+            headers=headers,
+            json={"staged_row_ids": [str(persisted_rows[0]["id"])]},
+        )
+        assert persisted_progress.status_code == 200
+        persisted_duplicate = await client.patch(
+            f"/api/v1/events/{persisted_event}/imports/{persisted_batch}/rows/"
+            f"{persisted_rows[1]['id']}",
+            headers=headers,
+            json={
+                "expected_version": 1,
+                "values": {"email": persisted_rows[0]["current_values"]["email"]},  # type: ignore[index]
+            },
+        )
+        assert persisted_duplicate.status_code == 200
+        persisted_duplicate_result = await client.post(
+            f"/api/v1/events/{persisted_event}/imports/{persisted_batch}/rows/"
+            f"{persisted_rows[1]['id']}/revalidate",
+            headers=headers,
+        )
+        assert persisted_duplicate_result.status_code == 200
+        assert persisted_duplicate_result.json()["status"] == "DUPLICATE"
+        assert persisted_duplicate_result.json()["validation_errors"][0]["code"] == (
+            "DUPLICATE_STAGED_OR_EXISTING"
+        )
+
+        within_event = await create_event("Synthetic Within Batch Duplicate Correction")
+        within_batch, within_rows = await upload(within_event, 3, "WithinDuplicate")
+        within_duplicate = await client.patch(
+            f"/api/v1/events/{within_event}/imports/{within_batch}/rows/{within_rows[2]['id']}",
+            headers=headers,
+            json={
+                "expected_version": 1,
+                "values": {"email": within_rows[1]["current_values"]["email"]},  # type: ignore[index]
+            },
+        )
+        assert within_duplicate.status_code == 200
+        within_duplicate_result = await client.post(
+            f"/api/v1/events/{within_event}/imports/{within_batch}/rows/"
+            f"{within_rows[2]['id']}/revalidate",
+            headers=headers,
+        )
+        assert within_duplicate_result.status_code == 200
+        assert within_duplicate_result.json()["status"] == "DUPLICATE"
+        assert within_duplicate_result.json()["validation_errors"][0]["code"] == (
+            "DUPLICATE_STAGED_OR_EXISTING"
+        )
+
+        preview_event = await create_event("Synthetic Historical Preview Correction")
+        _, preview_rows = await upload(preview_event, 2, "PreviewHistory")
+        _, preview_retry_rows = await upload(preview_event, 2, "PreviewHistory")
+        assert all(row["status"] == "VALID" for row in preview_rows)
+        assert all(row["status"] == "VALID" for row in preview_retry_rows)
+
+        concurrent_event = await create_event("Synthetic Concurrent Correction")
+        concurrent_batch, concurrent_rows = await upload(
+            concurrent_event, 2, "ConcurrentCorrection"
+        )
+        concurrent_id = str(concurrent_rows[0]["id"])
+        simultaneous_corrections = await asyncio.gather(
+            client.patch(
+                f"/api/v1/events/{concurrent_event}/imports/{concurrent_batch}/rows/"
+                f"{concurrent_id}",
+                headers=headers,
+                json={"expected_version": 1, "values": {"allowed_companions": 3}},
+            ),
+            client.patch(
+                f"/api/v1/events/{concurrent_event}/imports/{concurrent_batch}/rows/"
+                f"{concurrent_id}",
+                headers=headers,
+                json={"expected_version": 1, "values": {"category": "Colleagues"}},
+            ),
+        )
+        assert sorted(response.status_code for response in simultaneous_corrections) == [200, 409]
+        rejected_correction = next(
+            response for response in simultaneous_corrections if response.status_code == 409
+        )
+        assert "stale" in rejected_correction.text
+        concurrent_state = await client.get(
+            f"/api/v1/events/{concurrent_event}/imports/{concurrent_batch}/rows?limit=100",
+            headers=headers,
+        )
+        assert concurrent_state.status_code == 200
+        assert concurrent_state.json()["items"][0]["status"] == "PENDING_REVALIDATION"
+        assert concurrent_state.json()["items"][0]["row_version"] == 2
+
+        race_event = await create_event("Synthetic Correction Progression Race")
+        race_batch, race_rows = await upload(race_event, 1, "CorrectionRace")
+        race_id = str(race_rows[0]["id"])
+        race_original = dict(race_rows[0]["current_values"])  # type: ignore[arg-type]
+        race_correction, race_progression = await asyncio.gather(
+            client.patch(
+                f"/api/v1/events/{race_event}/imports/{race_batch}/rows/{race_id}",
+                headers=headers,
+                json={"expected_version": 1, "values": {"allowed_companions": 3}},
+            ),
+            client.post(
+                f"/api/v1/events/{race_event}/imports/{race_batch}/progress",
+                headers=headers,
+                json={"staged_row_ids": [race_id]},
+            ),
+        )
+        assert sorted([race_correction.status_code, race_progression.status_code]) == [200, 409]
+        race_state_response = await client.get(
+            f"/api/v1/events/{race_event}/imports/{race_batch}/rows?limit=100",
+            headers=headers,
+        )
+        race_guests = await client.get(
+            f"/api/v1/events/{race_event}/guests?limit=100",
+            headers=headers,
+        )
+        race_state = race_state_response.json()["items"][0]
+        if race_correction.status_code == 200:
+            assert race_progression.status_code == 409
+            assert race_state["status"] == "PENDING_REVALIDATION"
+            assert race_state["current_values"]["allowed_companions"] == 3
+            assert race_state["guest_id"] is None
+            assert race_guests.json()["items"] == []
+        else:
+            assert race_progression.status_code == 200
+            assert race_progression.json()["imported_rows"] == 1
+            assert race_state["status"] == "IMPORTED"
+            assert race_state["current_values"] == race_original
+            assert race_state["guest_id"] is not None
+            assert len(race_guests.json()["items"]) == 1
+
+        final_main_rows = await client.get(
+            f"/api/v1/events/{main_event}/imports/{main_batch}/rows?limit=100",
+            headers=headers,
+        )
+        final_main_guests = await client.get(
+            f"/api/v1/events/{main_event}/guests?limit=100",
+            headers=headers,
+        )
+        assert final_main_rows.status_code == final_main_guests.status_code == 200
+        assert sum(row["status"] == "IMPORTED" for row in final_main_rows.json()["items"]) == 5
+        assert sum(row["status"] == "VALID" for row in final_main_rows.json()["items"]) == 15
+        assert len(final_main_guests.json()["items"]) == 5
+        assert (
+            next(row for row in final_main_rows.json()["items"] if row["id"] == target_id)[
+                "guest_id"
+            ]
+            is None
+        )
+
+        return {
+            "event_ids": [
+                main_event,
+                second_event,
+                persisted_event,
+                within_event,
+                preview_event,
+                concurrent_event,
+                race_event,
+            ],
+            "main_event": main_event,
+            "main_batch": main_batch,
+            "target_id": target_id,
+            "concurrent_id": concurrent_id,
+            "race_id": race_id,
+        }
+
+
+def test_valid_unlinked_correction_postgresql_state_history_duplicates_and_races(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = configure_test_environment(monkeypatch, tmp_path)
+    assert disposable_alembic.main(["upgrade", "head"]) == 0
+    assert disposable_alembic.main(["check"]) == 0
+
+    assert DISPOSABLE_URL is not None
+    engine = create_engine(DISPOSABLE_URL, pool_pre_ping=True)
+    runtime = DatabaseRuntime(settings)
+    administrator_id: UUID | None = None
+    identifiers: dict[str, object] = {}
+    username = f"valid-correction-admin-{uuid4().hex[:8]}"
+    try:
+        security = AuthenticationSecurity.from_settings(settings)
+        with Session(engine, expire_on_commit=False) as session:
+            administrator = AdministratorProvisioningService(
+                AdministratorRepository(session),
+                security.passwords,
+            ).provision(username, "synthetic administrator password")
+            administrator_id = administrator.id
+
+        identifiers = asyncio.run(exercise_valid_row_correction_api(settings, runtime, username))
+        event_ids = [UUID(str(value)) for value in identifiers["event_ids"]]  # type: ignore[union-attr]
+        with Session(engine) as session:
+            target = session.get(ImportBatchRow, UUID(str(identifiers["target_id"])))
+            assert target is not None
+            assert target.status is ImportRowStatus.VALID
+            assert target.row_version == 5
+            assert target.guest_id is None
+            assert target.current_values == target.original_values
+            target_revisions = list(
+                session.execute(
+                    select(ImportRowRevision)
+                    .where(ImportRowRevision.row_id == target.id)
+                    .order_by(ImportRowRevision.revision)
+                ).scalars()
+            )
+            assert [revision.revision for revision in target_revisions] == [2, 3, 4, 5]
+            assert [revision.kind for revision in target_revisions] == [
+                ImportRevisionKind.CORRECTION,
+                ImportRevisionKind.REVALIDATION,
+                ImportRevisionKind.CORRECTION,
+                ImportRevisionKind.REVALIDATION,
+            ]
+
+            main_batch = session.get(ImportBatch, UUID(str(identifiers["main_batch"])))
+            assert main_batch is not None
+            assert main_batch.status is ImportBatchStatus.PARTIALLY_IMPORTED
+            main_rows = list(
+                session.execute(
+                    select(ImportBatchRow).where(ImportBatchRow.batch_id == main_batch.id)
+                ).scalars()
+            )
+            assert len(main_rows) == 20
+            assert sum(row.status is ImportRowStatus.IMPORTED for row in main_rows) == 5
+            assert sum(row.status is ImportRowStatus.VALID for row in main_rows) == 15
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Guest)
+                    .where(Guest.event_id == UUID(str(identifiers["main_event"])))
+                )
+                == 5
+            )
+
+            concurrent_revisions = session.scalar(
+                select(func.count())
+                .select_from(ImportRowRevision)
+                .where(ImportRowRevision.row_id == UUID(str(identifiers["concurrent_id"])))
+            )
+            assert concurrent_revisions == 1
+
+            for model in (
+                GuestQrCredential,
+                GeneratedGuestCard,
+                GuestAttendanceRecord,
+                GateScanAttempt,
+                GuestAttendanceCorrection,
+            ):
+                assert (
+                    session.scalar(
+                        select(func.count()).select_from(model).where(model.event_id.in_(event_ids))
+                    )
+                    == 0
+                )
+
+        assert "@example.test" not in caplog.text
+        assert "synthetic administrator password" not in caplog.text
     finally:
         runtime.close()
         if administrator_id is not None:
