@@ -118,6 +118,22 @@ class ImportRepository:
         )
         return list(self._session.execute(statement).scalars())
 
+    def selected_rows_for_update(
+        self,
+        batch_id: UUID,
+        row_ids: Sequence[UUID],
+    ) -> list[ImportBatchRow]:
+        statement = (
+            select(ImportBatchRow)
+            .where(
+                ImportBatchRow.batch_id == batch_id,
+                ImportBatchRow.id.in_(row_ids),
+            )
+            .order_by(ImportBatchRow.source_row_number, ImportBatchRow.id)
+            .with_for_update()
+        )
+        return list(self._session.execute(statement).scalars())
+
     def pending_rows_for_update(self, batch_id: UUID) -> list[ImportBatchRow]:
         statement = (
             select(ImportBatchRow)

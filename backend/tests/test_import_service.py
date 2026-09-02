@@ -257,6 +257,18 @@ class FakeImportRepository:
             offset=0,
         )
 
+    def selected_rows_for_update(
+        self,
+        batch_id: UUID,
+        row_ids: list[UUID],
+    ) -> list[ImportBatchRow]:
+        selected_ids = set(row_ids)
+        return [
+            row
+            for row in self.list_rows(batch_id, row_status=None, limit=10_000, offset=0)
+            if row.id in selected_ids
+        ]
+
     def pending_rows_for_update(self, batch_id: UUID) -> list[ImportBatchRow]:
         return self.list_rows(
             batch_id,
@@ -975,6 +987,186 @@ def test_partial_progression_imports_valid_once_and_isolates_other_rows() -> Non
     )
     assert repeated == {"imported_rows": 0, "invalidated_rows": 0, "duplicate_rows": 0}
     assert len(guests.items) == 2
+
+
+def test_explicit_progression_preserves_exact_set_continuation_fields_and_idempotency() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    rows = [
+        make_staged_row(
+            batch,
+            source_row,
+            {
+                "full_name": f"Selected {source_row}",
+                "phone_number": f"+25570000{source_row:04d}",
+                "email": f"selected-{source_row}@example.test",
+                "invitation_type": "Family" if source_row % 2 else "Individual",
+                "allowed_companions": source_row % 3,
+                "table_number": f"T-{source_row}",
+                "category": "Friends",
+            },
+            status=ImportRowStatus.VALID,
+        )
+        for source_row in range(2, 8)
+    ]
+    batch.candidate_row_count = len(rows)
+    imports.add_batch(batch, rows)
+
+    first = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+        staged_row_ids=[rows[0].id, rows[2].id],
+    )
+
+    assert first == {"imported_rows": 2, "invalidated_rows": 0, "duplicate_rows": 0}
+    assert [row.status for row in rows] == [
+        ImportRowStatus.IMPORTED,
+        ImportRowStatus.VALID,
+        ImportRowStatus.IMPORTED,
+        ImportRowStatus.VALID,
+        ImportRowStatus.VALID,
+        ImportRowStatus.VALID,
+    ]
+    assert all(row.row_version == 1 for row in rows)
+    assert imports.revisions == []
+    assert batch.status == ImportBatchStatus.PARTIALLY_IMPORTED
+    assert service.reconcile(events.event.id, batch.id)["currently_valid_staged_rows"] == 4
+    persisted = {guest.full_name: guest for guest in guests.items}
+    assert persisted["Selected 2"].allowed_companions == 2
+    assert persisted["Selected 2"].table_number == "T-2"
+    assert persisted["Selected 4"].category == "Friends"
+
+    mixed = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+        staged_row_ids=[rows[0].id, rows[3].id],
+    )
+    repeated = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+        staged_row_ids=[rows[0].id, rows[3].id],
+    )
+    continuation = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+    )
+
+    assert mixed["imported_rows"] == 1
+    assert repeated == {"imported_rows": 0, "invalidated_rows": 0, "duplicate_rows": 0}
+    assert continuation["imported_rows"] == 3
+    assert len(guests.items) == 6
+    assert all(row.status == ImportRowStatus.IMPORTED for row in rows)
+    assert batch.status == ImportBatchStatus.RECONCILED
+
+
+def test_explicit_progression_rejects_entire_invalid_selection_before_mutation() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    eligible = make_staged_row(
+        batch,
+        2,
+        guest_values("Eligible", email="eligible@example.test"),
+        status=ImportRowStatus.VALID,
+    )
+    invalid = make_staged_row(
+        batch,
+        3,
+        guest_values("Invalid", invitation_type=None),
+        status=ImportRowStatus.INVALID,
+    )
+    batch.candidate_row_count = 2
+    imports.add_batch(batch, [eligible, invalid])
+    foreign_batch = make_batch(events.event)
+    foreign = make_staged_row(
+        foreign_batch,
+        2,
+        guest_values("Foreign"),
+        status=ImportRowStatus.VALID,
+    )
+    imports.add_batch(foreign_batch, [foreign])
+
+    with pytest.raises(ImportConflictError, match="non-progressable"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[eligible.id, invalid.id],
+        )
+    with pytest.raises(ImportResourceNotFoundError, match="selected staged import row"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[eligible.id, foreign.id],
+        )
+    with pytest.raises(ImportResourceNotFoundError, match="selected staged import row"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[eligible.id, uuid4()],
+        )
+    with pytest.raises(ImportConflictError, match="must not be empty"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[],
+        )
+    with pytest.raises(ImportConflictError, match="must not contain duplicates"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[eligible.id, eligible.id],
+        )
+
+    assert guests.items == []
+    assert eligible.status == ImportRowStatus.VALID
+    assert eligible.guest_id is None
+    assert imports.revisions == []
+
+
+def test_explicit_progression_preflights_stale_valid_rows_before_mutation() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = make_batch(events.event)
+    eligible = make_staged_row(
+        batch,
+        2,
+        guest_values("Eligible", email="eligible@example.test"),
+        status=ImportRowStatus.VALID,
+    )
+    stale_policy = make_staged_row(
+        batch,
+        3,
+        guest_values("Stale Policy", companions=3),
+        status=ImportRowStatus.VALID,
+    )
+    batch.candidate_row_count = 2
+    imports.add_batch(batch, [eligible, stale_policy])
+
+    with pytest.raises(ImportConflictError, match="no longer eligible"):
+        service.progress_valid_rows(
+            events.event.id,
+            batch.id,
+            administrator_id=events.event.created_by,
+            staged_row_ids=[eligible.id, stale_policy.id],
+        )
+
+    assert guests.items == []
+    assert eligible.status == stale_policy.status == ImportRowStatus.VALID
+    assert eligible.guest_id is stale_policy.guest_id is None
+    assert imports.revisions == []
 
 
 def test_newly_valid_corrected_row_imports_exactly_once_and_reconciles() -> None:

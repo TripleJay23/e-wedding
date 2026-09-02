@@ -12,6 +12,7 @@ from app.schemas.imports import (
     ImportBatchDetailResponse,
     ImportBatchListResponse,
     ImportBatchSummaryResponse,
+    ImportProgressRequest,
     ImportProgressResponse,
     ImportReconciliationResponse,
     ImportRevalidationResponse,
@@ -231,13 +232,15 @@ def progress_valid_rows(
     batch_id: UUID,
     administrator: Annotated[Administrator, Depends(get_current_administrator)],
     service: Annotated[ImportService, Depends(get_import_service)],
+    payload: ImportProgressRequest | None = None,
 ) -> ImportProgressResponse:
-    """Import all currently valid rows once and leave all other outcomes staged."""
+    """Import all valid rows, or an explicit exact UUID-selected subset, once."""
     try:
         result = service.progress_valid_rows(
             event_id,
             batch_id,
             administrator_id=administrator.id,
+            staged_row_ids=None if payload is None else payload.staged_row_ids,
         )
         reconciliation = service.reconcile(event_id, batch_id)
     except (ImportResourceNotFoundError, ImportConflictError) as exc:

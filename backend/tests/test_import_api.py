@@ -349,6 +349,92 @@ def test_correction_revalidation_and_progression_routes_are_explicit(
     assert progressed.status_code == 200
     assert progressed.json()["imported_rows"] == 1
     assert progressed.json()["reconciliation"]["overall_batch_state"] == "RECONCILED"
+    progress_call = next(call for call in service.calls if call[0] == "progress")
+    assert progress_call[1][2]["staged_row_ids"] is None
+
+
+def test_progression_route_accepts_exact_uuid_selection(
+    development_settings: Settings,
+) -> None:
+    app, service, _, event_id = build_app(development_settings)
+    selected_ids = [service.row.id, uuid4()]
+
+    progressed = asyncio.run(
+        request(
+            app,
+            "POST",
+            f"/api/v1/events/{event_id}/imports/{service.batch.id}/progress",
+            json={"staged_row_ids": [str(row_id) for row_id in selected_ids]},
+        )
+    )
+
+    assert progressed.status_code == 200
+    progress_call = next(call for call in service.calls if call[0] == "progress")
+    assert progress_call[1][2]["staged_row_ids"] == selected_ids
+
+
+def test_progression_route_omitted_selector_preserves_batch_wide_behavior(
+    development_settings: Settings,
+) -> None:
+    app, service, _, event_id = build_app(development_settings)
+
+    progressed = asyncio.run(
+        request(
+            app,
+            "POST",
+            f"/api/v1/events/{event_id}/imports/{service.batch.id}/progress",
+            json={},
+        )
+    )
+
+    assert progressed.status_code == 200
+    progress_call = next(call for call in service.calls if call[0] == "progress")
+    assert progress_call[1][2]["staged_row_ids"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"staged_row_ids": []},
+        {"staged_row_ids": None},
+        {"staged_row_ids": [str(NOW.date())]},
+        {"staged_row_ids": [str(UUID(int=1)), str(UUID(int=1))]},
+        {"unexpected": []},
+    ],
+)
+def test_progression_route_rejects_unsafe_selection_shapes(
+    development_settings: Settings,
+    payload: dict[str, Any],
+) -> None:
+    app, service, _, event_id = build_app(development_settings)
+
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            f"/api/v1/events/{event_id}/imports/{service.batch.id}/progress",
+            json=payload,
+        )
+    )
+
+    assert response.status_code == 422
+    assert not any(call[0] == "progress" for call in service.calls)
+
+
+def test_missing_authentication_rejects_selected_progression_before_service(
+    development_settings: Settings,
+) -> None:
+    app, service, _, event_id = build_app(development_settings, authenticated=False)
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            f"/api/v1/events/{event_id}/imports/{service.batch.id}/progress",
+            json={"staged_row_ids": [str(service.row.id)]},
+        )
+    )
+    assert response.status_code == 401
+    assert service.calls == []
 
 
 @pytest.mark.parametrize(

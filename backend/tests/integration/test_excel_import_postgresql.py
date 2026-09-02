@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from openpyxl import Workbook
-from sqlalchemy import create_engine, delete, inspect, select
+from sqlalchemy import create_engine, delete, func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,13 @@ from app.core.settings import Settings
 from app.db.runtime import DatabaseRuntime
 from app.main import create_app
 from app.models.administrator import Administrator
+from app.models.attendance import GateScanAttempt, GuestAttendanceRecord
+from app.models.attendance_corrections import GuestAttendanceCorrection
+from app.models.cards import GeneratedGuestCard
 from app.models.event import Event
+from app.models.guest import Guest
 from app.models.imports import ImportBatch, ImportBatchRow, ImportRowRevision, ImportRowStatus
+from app.models.qr import GuestQrCredential
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
 
@@ -116,6 +121,45 @@ def concurrent_retry_workbook() -> bytes:
     worksheet.append(["Full Name", "Invitation Type", "Email", "Allowed Companions"])
     worksheet.append(["Synthetic Concurrent One", "Family", "concurrent-one@example.test", 2])
     worksheet.append(["Synthetic Concurrent Two", "Individual", "concurrent-two@example.test", 0])
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def selectable_workbook(
+    row_count: int,
+    prefix: str,
+    *,
+    invalid_last_row: bool = False,
+) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = f"Synthetic {prefix}"
+    worksheet.append(
+        [
+            "Full Name",
+            "Phone",
+            "Email",
+            "Invitation Type",
+            "Allowed Companions",
+            "Table Number",
+            "Category",
+        ]
+    )
+    for index in range(1, row_count + 1):
+        worksheet.append(
+            [
+                f"Synthetic {prefix} Guest {index:03d}",
+                f"+2557{index:08d}",
+                f"{prefix.casefold()}-{index:03d}@example.test",
+                None if invalid_last_row and index == row_count else "Family",
+                index % 3,
+                f"T-{index:03d}",
+                "Friends",
+            ]
+        )
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -556,6 +600,384 @@ async def exercise_import_api(
             "contextual_event_id": contextual_event_id,
             "contextual_batch_id": contextual_batch_id,
         }
+
+
+async def exercise_partial_selection_api(
+    settings: Settings,
+    runtime: DatabaseRuntime,
+    username: str,
+) -> dict[str, object]:
+    app = create_app(
+        settings,
+        database_runtime=runtime,
+        authentication_security=AuthenticationSecurity.from_settings(settings),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://synthetic.test") as client,
+    ):
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "synthetic administrator password"},
+        )
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        base_event = {
+            "bride_name": "Synthetic",
+            "groom_name": "Selection",
+            "event_datetime": "2027-06-12T14:30:00+03:00",
+            "venue": "Synthetic Hall",
+            "max_companions_per_invitation": 2,
+        }
+
+        async def create_event(name: str) -> str:
+            response = await client.post(
+                "/api/v1/events",
+                headers=headers,
+                json={**base_event, "event_name": name},
+            )
+            assert response.status_code == 201, response.text
+            return str(response.json()["id"])
+
+        async def upload(
+            event_id: str,
+            row_count: int,
+            prefix: str,
+            *,
+            invalid_last_row: bool = False,
+        ) -> tuple[str, list[dict[str, object]]]:
+            response = await client.post(
+                f"/api/v1/events/{event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        f"synthetic-{prefix.casefold()}.xlsx",
+                        selectable_workbook(
+                            row_count,
+                            prefix,
+                            invalid_last_row=invalid_last_row,
+                        ),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            assert response.status_code == 201, response.text
+            batch_id = str(response.json()["id"])
+            rows = await client.get(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=100",
+                headers=headers,
+            )
+            assert rows.status_code == 200
+            return batch_id, rows.json()["items"]
+
+        twenty_event_id = await create_event("Synthetic Twenty Row Selection")
+        twenty_batch_id, twenty_rows = await upload(twenty_event_id, 20, "Twenty")
+        first_five_ids = [str(row["id"]) for row in twenty_rows[:5]]
+        first_five = await client.post(
+            f"/api/v1/events/{twenty_event_id}/imports/{twenty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": first_five_ids},
+        )
+        assert first_five.status_code == 200, first_five.text
+        assert first_five.json()["imported_rows"] == 5
+        assert first_five.json()["reconciliation"]["rows_already_imported"] == 5
+        assert first_five.json()["reconciliation"]["currently_valid_staged_rows"] == 15
+        assert first_five.json()["reconciliation"]["overall_batch_state"] == ("PARTIALLY_IMPORTED")
+
+        next_three_ids = [str(row["id"]) for row in twenty_rows[5:8]]
+        next_three = await client.post(
+            f"/api/v1/events/{twenty_event_id}/imports/{twenty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": next_three_ids},
+        )
+        assert next_three.status_code == 200, next_three.text
+        assert next_three.json()["imported_rows"] == 3
+        assert next_three.json()["reconciliation"]["rows_already_imported"] == 8
+        assert next_three.json()["reconciliation"]["currently_valid_staged_rows"] == 12
+
+        continuation = await client.post(
+            f"/api/v1/events/{twenty_event_id}/imports/{twenty_batch_id}/progress",
+            headers=headers,
+        )
+        assert continuation.status_code == 200, continuation.text
+        assert continuation.json()["imported_rows"] == 12
+        assert continuation.json()["duplicate_rows"] == 0
+        assert continuation.json()["reconciliation"]["rows_already_imported"] == 20
+        assert continuation.json()["reconciliation"]["overall_batch_state"] == "RECONCILED"
+
+        fifty_event_id = await create_event("Synthetic Fifty Row Selection")
+        fifty_batch_id, fifty_rows = await upload(fifty_event_id, 50, "Fifty")
+        selected_ten_ids = [str(row["id"]) for row in fifty_rows[:10]]
+        selected_ten = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": selected_ten_ids},
+        )
+        assert selected_ten.status_code == 200, selected_ten.text
+        assert selected_ten.json()["imported_rows"] == 10
+        assert selected_ten.json()["reconciliation"]["rows_already_imported"] == 10
+        assert selected_ten.json()["reconciliation"]["currently_valid_staged_rows"] == 40
+        repeated_ten = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": selected_ten_ids},
+        )
+        assert repeated_ten.status_code == 200
+        assert repeated_ten.json()["imported_rows"] == 0
+
+        foreign_batch_id, foreign_rows = await upload(fifty_event_id, 2, "Foreign")
+        before_atomic_refusals = await client.get(
+            f"/api/v1/events/{fifty_event_id}/guests?limit=100",
+            headers=headers,
+        )
+        assert before_atomic_refusals.status_code == 200
+        assert len(before_atomic_refusals.json()["items"]) == 10
+        valid_unselected_id = str(fifty_rows[10]["id"])
+        wrong_batch = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": [valid_unselected_id, str(foreign_rows[0]["id"])]},
+        )
+        nonexistent = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": [valid_unselected_id, str(uuid4())]},
+        )
+        assert wrong_batch.status_code == nonexistent.status_code == 404
+
+        invalid_batch_id, invalid_rows = await upload(
+            fifty_event_id,
+            2,
+            "Invalid",
+            invalid_last_row=True,
+        )
+        invalid_selection = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{invalid_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": [str(row["id"]) for row in invalid_rows]},
+        )
+        assert invalid_selection.status_code == 409
+        assert "non-progressable" in invalid_selection.text
+
+        empty_selection = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": []},
+        )
+        duplicate_selection = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            headers=headers,
+            json={"staged_row_ids": [valid_unselected_id, valid_unselected_id]},
+        )
+        unauthenticated = await client.post(
+            f"/api/v1/events/{fifty_event_id}/imports/{fifty_batch_id}/progress",
+            json={"staged_row_ids": [valid_unselected_id]},
+        )
+        assert empty_selection.status_code == duplicate_selection.status_code == 422
+        assert unauthenticated.status_code == 401
+        after_atomic_refusals = await client.get(
+            f"/api/v1/events/{fifty_event_id}/guests?limit=100",
+            headers=headers,
+        )
+        assert after_atomic_refusals.status_code == 200
+        assert len(after_atomic_refusals.json()["items"]) == 10
+        privacy_text = " ".join(
+            response.text
+            for response in (wrong_batch, nonexistent, invalid_selection, empty_selection)
+        )
+        assert "@example.test" not in privacy_text
+        assert "Synthetic Fifty" not in privacy_text
+
+        concurrency_event_id = await create_event("Synthetic Concurrent Selection")
+        concurrency_batch_id, concurrency_rows = await upload(
+            concurrency_event_id,
+            20,
+            "ConcurrentSelection",
+        )
+        concurrency_ids = [str(row["id"]) for row in concurrency_rows]
+        overlapping = await asyncio.gather(
+            client.post(
+                f"/api/v1/events/{concurrency_event_id}/imports/{concurrency_batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": concurrency_ids[:10]},
+            ),
+            client.post(
+                f"/api/v1/events/{concurrency_event_id}/imports/{concurrency_batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": concurrency_ids[5:15]},
+            ),
+        )
+        assert all(response.status_code == 200 for response in overlapping)
+        assert sum(response.json()["imported_rows"] for response in overlapping) == 15
+        non_overlapping = await asyncio.gather(
+            client.post(
+                f"/api/v1/events/{concurrency_event_id}/imports/{concurrency_batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": concurrency_ids[15:18]},
+            ),
+            client.post(
+                f"/api/v1/events/{concurrency_event_id}/imports/{concurrency_batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": concurrency_ids[18:]},
+            ),
+        )
+        assert all(response.status_code == 200 for response in non_overlapping)
+        assert sum(response.json()["imported_rows"] for response in non_overlapping) == 5
+        concurrent_guests = await client.get(
+            f"/api/v1/events/{concurrency_event_id}/guests?limit=100",
+            headers=headers,
+        )
+        assert concurrent_guests.status_code == 200
+        assert len(concurrent_guests.json()["items"]) == 20
+
+        return {
+            "event_ids": [twenty_event_id, fifty_event_id, concurrency_event_id],
+            "twenty_batch_id": twenty_batch_id,
+            "fifty_batch_id": fifty_batch_id,
+            "selected_ten_ids": selected_ten_ids,
+            "concurrency_batch_id": concurrency_batch_id,
+            "foreign_batch_id": foreign_batch_id,
+            "invalid_batch_id": invalid_batch_id,
+        }
+
+
+def test_partial_selection_postgresql_exact_sets_concurrency_and_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = configure_test_environment(monkeypatch, tmp_path)
+    assert disposable_alembic.main(["upgrade", "head"]) == 0
+    assert disposable_alembic.main(["check"]) == 0
+
+    assert DISPOSABLE_URL is not None
+    engine = create_engine(DISPOSABLE_URL, pool_pre_ping=True)
+    runtime = DatabaseRuntime(settings)
+    administrator_id: UUID | None = None
+    identifiers: dict[str, object] = {}
+    username = f"s4-partial-admin-{uuid4().hex[:8]}"
+    try:
+        security = AuthenticationSecurity.from_settings(settings)
+        with Session(engine, expire_on_commit=False) as session:
+            administrator = AdministratorProvisioningService(
+                AdministratorRepository(session),
+                security.passwords,
+            ).provision(username, "synthetic administrator password")
+            administrator_id = administrator.id
+
+        identifiers = asyncio.run(exercise_partial_selection_api(settings, runtime, username))
+        event_ids = [UUID(value) for value in identifiers["event_ids"]]  # type: ignore[arg-type]
+        twenty_event_id, fifty_event_id, concurrency_event_id = event_ids
+        twenty_batch_id = UUID(str(identifiers["twenty_batch_id"]))
+        fifty_batch_id = UUID(str(identifiers["fifty_batch_id"]))
+        concurrency_batch_id = UUID(str(identifiers["concurrency_batch_id"]))
+        selected_ten_ids = {
+            UUID(value)
+            for value in identifiers["selected_ten_ids"]  # type: ignore[union-attr]
+        }
+
+        with Session(engine) as session:
+            assert (
+                session.scalar(
+                    select(func.count()).select_from(Guest).where(Guest.event_id == twenty_event_id)
+                )
+                == 20
+            )
+            twenty_rows = list(
+                session.execute(
+                    select(ImportBatchRow).where(ImportBatchRow.batch_id == twenty_batch_id)
+                ).scalars()
+            )
+            assert len(twenty_rows) == 20
+            assert all(row.status is ImportRowStatus.IMPORTED for row in twenty_rows)
+
+            fifty_rows = list(
+                session.execute(
+                    select(ImportBatchRow)
+                    .where(ImportBatchRow.batch_id == fifty_batch_id)
+                    .order_by(ImportBatchRow.source_row_number)
+                ).scalars()
+            )
+            assert len(fifty_rows) == 50
+            assert sum(row.status is ImportRowStatus.IMPORTED for row in fifty_rows) == 10
+            assert sum(row.status is ImportRowStatus.VALID for row in fifty_rows) == 40
+            assert {row.id for row in fifty_rows if row.guest_id is not None} == selected_ten_ids
+            assert all(row.row_version == 1 for row in fifty_rows)
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ImportRowRevision)
+                    .where(ImportRowRevision.row_id.in_([row.id for row in fifty_rows]))
+                )
+                == 0
+            )
+            selected_guests = list(
+                session.execute(
+                    select(Guest).where(Guest.event_id == fifty_event_id).order_by(Guest.full_name)
+                ).scalars()
+            )
+            assert len(selected_guests) == 10
+            assert selected_guests[0].phone_number == "+255700000001"
+            assert selected_guests[0].email == "fifty-001@example.test"
+            assert selected_guests[0].invitation_type == "Family"
+            assert selected_guests[0].allowed_companions == 1
+            assert selected_guests[0].table_number == "T-001"
+            assert selected_guests[0].category == "Friends"
+
+            concurrency_rows = list(
+                session.execute(
+                    select(ImportBatchRow).where(ImportBatchRow.batch_id == concurrency_batch_id)
+                ).scalars()
+            )
+            assert len(concurrency_rows) == 20
+            assert all(row.status is ImportRowStatus.IMPORTED for row in concurrency_rows)
+            assert len({row.guest_id for row in concurrency_rows}) == 20
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Guest)
+                    .where(Guest.event_id == concurrency_event_id)
+                )
+                == 20
+            )
+
+            for model in (
+                GuestQrCredential,
+                GeneratedGuestCard,
+                GuestAttendanceRecord,
+                GateScanAttempt,
+                GuestAttendanceCorrection,
+            ):
+                assert (
+                    session.scalar(
+                        select(func.count()).select_from(model).where(model.event_id.in_(event_ids))
+                    )
+                    == 0
+                )
+
+        assert "@example.test" not in caplog.text
+        assert "Synthetic Fifty" not in caplog.text
+    finally:
+        runtime.close()
+        if administrator_id is not None:
+            with Session(engine) as session:
+                events = list(
+                    session.execute(
+                        select(Event).where(Event.created_by == administrator_id)
+                    ).scalars()
+                )
+                event_ids = [event.id for event in events]
+                if event_ids:
+                    session.execute(delete(ImportBatch).where(ImportBatch.event_id.in_(event_ids)))
+                for event in events:
+                    session.delete(event)
+                session.flush()
+                administrator = session.get(Administrator, administrator_id)
+                if administrator is not None:
+                    session.delete(administrator)
+                session.commit()
+        engine.dispose()
 
 
 def test_m4_schema_api_correction_reimport_and_immutability(

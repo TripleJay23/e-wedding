@@ -58,6 +58,13 @@ Required capabilities:
 
 The correction endpoints are required before Excel milestone completion.
 
+`POST /api/v1/events/{event_id}/imports/{batch_id}/progress` preserves batch-wide
+progression when called without a body. An optional body containing a non-empty,
+unique `staged_row_ids` list selects an exact subset by persisted staged-row UUID.
+All selectors are validated against the requested batch before mutation. Selected
+`VALID` rows progress, already `IMPORTED` rows are idempotent no-ops, and other row
+states reject the complete selection. Unselected rows remain staged and unchanged.
+
 ### Guests
 
 - list/get/create/update according to policy

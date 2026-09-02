@@ -100,6 +100,14 @@ Example:
 
 After administrator review, the system may import the 43 valid rows while retaining the 7 invalid staged rows for correction.
 
+Progression uses the existing batch endpoint. With no request body, it imports all
+currently eligible `VALID` rows. A request may instead provide a non-empty, unique
+`staged_row_ids` list of persisted staged-row UUIDs to import exactly that subset.
+Every selected row must belong to the requested batch and be either currently
+`VALID` or already `IMPORTED`; invalid selection is rejected atomically. Already
+imported selected rows are idempotent no-ops, and unselected rows remain unchanged.
+An explicit empty selection never means "import all."
+
 ## Staged-row correction
 
 Required capability:

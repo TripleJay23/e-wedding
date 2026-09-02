@@ -145,6 +145,24 @@ class ImportRowCorrectionRequest(BaseModel):
     values: ImportCorrectionValues
 
 
+class ImportProgressRequest(BaseModel):
+    """Optional exact staged-row UUID selection for one progression operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    staged_row_ids: list[UUID] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_selection_when_supplied(self) -> Self:
+        if "staged_row_ids" in self.model_fields_set and self.staged_row_ids is None:
+            raise ValueError("staged_row_ids may not be null")
+        if self.staged_row_ids is not None and len(set(self.staged_row_ids)) != len(
+            self.staged_row_ids
+        ):
+            raise ValueError("staged_row_ids must not contain duplicates")
+        return self
+
+
 class ImportProgressResponse(BaseModel):
     """Outcome of one idempotent currently-valid progression operation."""
 

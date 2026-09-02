@@ -331,8 +331,9 @@ class ImportService:
         batch_id: UUID,
         *,
         administrator_id: UUID,
+        staged_row_ids: list[UUID] | None = None,
     ) -> dict[str, int]:
-        """Import currently valid rows once, isolating row-level persistence failures."""
+        """Import all valid rows or one exact UUID-selected subset once."""
         event = self._events.get_for_update(event_id)
         if event is None:
             raise ImportResourceNotFoundError("event not found")
@@ -342,8 +343,39 @@ class ImportService:
             raise ImportConflictError(str(exc)) from exc
         batch = self._require_locked_batch(event_id, batch_id)
         policies = _policies_from_models(self._require_guest_fields(event_id))
-        rows = self._imports.eligible_rows_for_update(batch.id)
+        if staged_row_ids is None:
+            rows = self._imports.eligible_rows_for_update(batch.id)
+        else:
+            if not staged_row_ids:
+                raise ImportConflictError("staged row selection must not be empty")
+            selected_ids = set(staged_row_ids)
+            if len(selected_ids) != len(staged_row_ids):
+                raise ImportConflictError("staged row selection must not contain duplicates")
+            selected_rows = self._imports.selected_rows_for_update(batch.id, staged_row_ids)
+            if {row.id for row in selected_rows} != selected_ids:
+                raise ImportResourceNotFoundError("selected staged import row not found")
+            if any(
+                row.status not in {ImportRowStatus.VALID, ImportRowStatus.IMPORTED}
+                for row in selected_rows
+            ):
+                raise ImportConflictError("staged row selection contains a non-progressable row")
+            rows = [row for row in selected_rows if row.status == ImportRowStatus.VALID]
         reserved = self._existing_guest_fingerprints(event_id)
+        if staged_row_ids is not None:
+            preflight_reserved = set(reserved)
+            for row in rows:
+                current_values = dict(row.current_values)
+                errors = validate_guest_values(
+                    current_values,
+                    policies,
+                    event.max_companions_per_invitation,
+                )
+                fingerprints = set(guest_identity_fingerprints(current_values))
+                if errors or fingerprints & preflight_reserved:
+                    raise ImportConflictError(
+                        "staged row selection contains a row that is no longer eligible"
+                    )
+                preflight_reserved.update(fingerprints)
         imported_count = 0
         invalidated_count = 0
         duplicate_count = 0
