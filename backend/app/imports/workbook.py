@@ -14,6 +14,7 @@ from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import Cell
+from openpyxl.utils.cell import column_index_from_string
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.models.event import GuestFieldKey
@@ -46,24 +47,13 @@ _FORBIDDEN_PREFIXES = (
 )
 _FORBIDDEN_PARTS = {"xl/vbaProject.bin"}
 _HEADER_PUNCTUATION = re.compile(r"[^a-z0-9]+")
-_FOOTER_TOTAL_TOKENS = frozenset({"total", "totals"})
-_FOOTER_SUMMARY_TOKENS = frozenset({"summary"})
-_FOOTER_GUEST_TOKENS = frozenset({"guest", "guests"})
-_FOOTER_BENIGN_TOKENS = frozenset(
-    {
-        "count",
-        "grand",
-        "guest",
-        "guests",
-        "no",
-        "number",
-        "of",
-        "overall",
-        "summary",
-        "total",
-        "totals",
-    }
+_PHONE_LIKE = re.compile(r"^\+?[0-9 ()\-.]+$")
+_AGGREGATE_FORMULA = re.compile(
+    r"^\s*=\s*(SUM|COUNT|COUNTA)\s*\(\s*\$?([A-Z]+)\$?(\d+)\s*:\s*"
+    r"\$?([A-Z]+)\$?(\d+)\s*\)\s*$",
+    re.IGNORECASE,
 )
+_COUNTABLE_FIELDS = frozenset(GuestFieldKey)
 
 HEADER_ALIASES: dict[GuestFieldKey, frozenset[str]] = {
     GuestFieldKey.FULL_NAME: frozenset({"full name", "guest", "guest name", "name"}),
@@ -127,6 +117,42 @@ class _HeaderCandidate:
     @property
     def score(self) -> int:
         return len(self.mapping)
+
+
+@dataclass(slots=True)
+class _GuestTableContext:
+    """Bounded semantic context accumulated from preceding candidate rows."""
+
+    header_row_number: int
+    candidate_row_numbers: list[int]
+    invitation_types: set[str]
+    has_strong_guest_evidence: bool = False
+
+    def observe(
+        self,
+        row_number: int,
+        values: dict[str, str | int | None],
+        policies: list[GuestFieldPolicy],
+        event_companion_maximum: int,
+    ) -> None:
+        self.candidate_row_numbers.append(row_number)
+        evidence = _guest_evidence(
+            values,
+            policies,
+            event_companion_maximum,
+            known_invitation_types=self.invitation_types,
+        )
+        if evidence:
+            self.has_strong_guest_evidence = True
+
+        invitation_type = values.get(GuestFieldKey.INVITATION_TYPE.value)
+        if evidence and _field_value_is_valid(
+            GuestFieldKey.INVITATION_TYPE,
+            invitation_type,
+            event_companion_maximum,
+        ):
+            assert isinstance(invitation_type, str)
+            self.invitation_types.add(_semantic_text(invitation_type))
 
 
 class WorkbookParser:
@@ -238,7 +264,7 @@ class WorkbookParser:
         aliases = _enabled_alias_lookup(set(candidate.mapping))
         merged_ranges = tuple(worksheet.merged_cells.ranges)
         last_populated_row = _last_populated_row(worksheet, candidate.row_number + 1)
-        seen_candidate = False
+        context = _GuestTableContext(candidate.row_number, [], set())
 
         for row_number in range(candidate.row_number + 1, worksheet.max_row + 1):
             cells = worksheet[row_number]
@@ -248,14 +274,15 @@ class WorkbookParser:
                 selected_mapping=candidate.mapping,
                 aliases=aliases,
                 merged_ranges=merged_ranges,
-                seen_candidate=seen_candidate,
                 is_terminal=row_number == last_populated_row,
+                policies=policies,
+                event_companion_maximum=event_companion_maximum,
+                context=context,
             )
             if reason is not None:
                 ignored.append({"row_number": row_number, "reason": reason})
                 continue
 
-            seen_candidate = True
             values, normalization_errors = _normalize_candidate(cells, candidate.mapping, policies)
             validation_errors = validate_guest_values(
                 values,
@@ -280,6 +307,7 @@ class WorkbookParser:
                     identity_fingerprints=fingerprints,
                 )
             )
+            context.observe(row_number, values, policies, event_companion_maximum)
             if len(parsed_rows) > self._maximum_candidate_rows:
                 raise WorkbookRejectedError(
                     "CANDIDATE_LIMIT_EXCEEDED", "workbook contains too many guest rows"
@@ -399,8 +427,10 @@ def _ignored_row_reason(
     selected_mapping: dict[GuestFieldKey, int],
     aliases: dict[str, GuestFieldKey],
     merged_ranges: tuple[Any, ...],
-    seen_candidate: bool,
     is_terminal: bool,
+    policies: list[GuestFieldPolicy],
+    event_companion_maximum: int,
+    context: _GuestTableContext,
 ) -> str | None:
     populated = [cell for cell in cells if cell.value is not None and cell.value != ""]
     if not populated:
@@ -418,7 +448,15 @@ def _ignored_row_reason(
     ):
         return "PRESENTATION"
 
-    if seen_candidate and is_terminal and _is_sparse_aggregate_footer(populated, selected_mapping):
+    if is_terminal and _is_contextual_aggregate_footer(
+        cells,
+        populated,
+        row_number=row_number,
+        selected_mapping=selected_mapping,
+        policies=policies,
+        event_companion_maximum=event_companion_maximum,
+        context=context,
+    ):
         return "FOOTER"
     return None
 
@@ -434,33 +472,163 @@ def _last_populated_row(worksheet: Worksheet, first_row: int) -> int | None:
     return None
 
 
-def _is_sparse_aggregate_footer(
+def _is_contextual_aggregate_footer(
+    cells: tuple[Cell, ...],
     populated: list[Cell],
+    *,
+    row_number: int,
     selected_mapping: dict[GuestFieldKey, int],
+    policies: list[GuestFieldPolicy],
+    event_companion_maximum: int,
+    context: _GuestTableContext,
 ) -> bool:
-    """Recognize one aggregate formula plus one deterministic summary label."""
-    if len(populated) != 2:
+    """Recognize a terminal footer from independent structural and semantic evidence."""
+    if (
+        len(populated) != 2
+        or not context.has_strong_guest_evidence
+        or not context.candidate_row_numbers
+    ):
         return False
 
     aggregate_column = selected_mapping.get(GuestFieldKey.ALLOWED_COMPANIONS)
     if aggregate_column is None:
         return False
     aggregate_cells = [cell for cell in populated if cell.column == aggregate_column]
-    if len(aggregate_cells) != 1 or not _cell_is_formula(aggregate_cells[0]):
+    if len(aggregate_cells) != 1 or not _is_supported_preceding_aggregate(
+        aggregate_cells[0],
+        footer_row_number=row_number,
+        header_row_number=context.header_row_number,
+        candidate_row_numbers=context.candidate_row_numbers,
+        selected_mapping=selected_mapping,
+    ):
         return False
 
     summary_cells = [cell for cell in populated if cell is not aggregate_cells[0]]
-    return len(summary_cells) == 1 and _is_structural_footer_label(summary_cells[0].value)
-
-
-def _is_structural_footer_label(value: Any) -> bool:
-    """Recognize only compositional labels made entirely from benign summary tokens."""
-    tokens = tuple(normalize_header(value).split())
-    if not tokens or not set(tokens).issubset(_FOOTER_BENIGN_TOKENS):
+    if (
+        len(summary_cells) != 1
+        or not isinstance(summary_cells[0].value, str)
+        or _cell_is_formula(summary_cells[0])
+    ):
         return False
-    if set(tokens) & (_FOOTER_TOTAL_TOKENS | _FOOTER_SUMMARY_TOKENS):
+
+    values, _ = _normalize_candidate(cells, selected_mapping, policies)
+    return not _guest_evidence(
+        values,
+        policies,
+        event_companion_maximum,
+        known_invitation_types=context.invitation_types,
+    )
+
+
+def _is_supported_preceding_aggregate(
+    cell: Cell,
+    *,
+    footer_row_number: int,
+    header_row_number: int,
+    candidate_row_numbers: list[int],
+    selected_mapping: dict[GuestFieldKey, int],
+) -> bool:
+    """Accept one non-executed aggregate over the preceding guest-table range."""
+    if not _cell_is_formula(cell) or not isinstance(cell.value, str):
+        return False
+    match = _AGGREGATE_FORMULA.fullmatch(cell.value)
+    if match is None:
+        return False
+
+    function, first_column, first_row, last_column, last_row = match.groups()
+    if first_column.casefold() != last_column.casefold():
+        return False
+    try:
+        range_column = column_index_from_string(first_column)
+    except ValueError:
+        return False
+    reference_fields = {
+        field_key for field_key, column in selected_mapping.items() if column == range_column
+    }
+    if len(reference_fields) != 1:
+        return False
+    reference_field = next(iter(reference_fields))
+    if function.casefold() == "sum" and reference_field is not GuestFieldKey.ALLOWED_COMPANIONS:
+        return False
+    if function.casefold() in {"count", "counta"} and reference_field not in _COUNTABLE_FIELDS:
+        return False
+
+    range_start = int(first_row)
+    range_end = int(last_row)
+    return (
+        header_row_number < range_start <= min(candidate_row_numbers)
+        and max(candidate_row_numbers) <= range_end < footer_row_number
+    )
+
+
+def _guest_evidence(
+    values: dict[str, str | int | None],
+    policies: list[GuestFieldPolicy],
+    event_companion_maximum: int,
+    *,
+    known_invitation_types: set[str],
+) -> bool:
+    """Return whether normalized values contain meaningful guest evidence."""
+    enabled = {policy.field_key for policy in policies if policy.enabled}
+    full_name = values.get(GuestFieldKey.FULL_NAME.value)
+    if GuestFieldKey.FULL_NAME in enabled and isinstance(full_name, str) and full_name:
         return True
-    return "count" in tokens and bool(set(tokens) & _FOOTER_GUEST_TOKENS)
+
+    for field_key in (GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL):
+        value = values.get(field_key.value)
+        if field_key not in enabled or not isinstance(value, str):
+            continue
+        if _field_value_is_valid(field_key, value, event_companion_maximum):
+            return True
+        if field_key is GuestFieldKey.PHONE_NUMBER and _PHONE_LIKE.fullmatch(value):
+            return True
+        if field_key is GuestFieldKey.EMAIL and "@" in value:
+            return True
+
+    invitation_type = values.get(GuestFieldKey.INVITATION_TYPE.value)
+    invitation_evidence = (
+        GuestFieldKey.INVITATION_TYPE in enabled
+        and _field_value_is_valid(
+            GuestFieldKey.INVITATION_TYPE,
+            invitation_type,
+            event_companion_maximum,
+        )
+        and isinstance(invitation_type, str)
+        and _semantic_text(invitation_type) in known_invitation_types
+    )
+    if invitation_evidence:
+        return True
+
+    ancillary_fields = (GuestFieldKey.TABLE_NUMBER, GuestFieldKey.CATEGORY)
+    ancillary_evidence = any(
+        field_key in enabled
+        and _field_value_is_valid(
+            field_key,
+            values.get(field_key.value),
+            event_companion_maximum,
+        )
+        for field_key in ancillary_fields
+    )
+    return ancillary_evidence
+
+
+def _field_value_is_valid(
+    field_key: GuestFieldKey,
+    value: str | int | None,
+    event_companion_maximum: int,
+) -> bool:
+    if value is None or value == "":
+        return False
+    field_policy = GuestFieldPolicy(field_key, True, False)
+    candidate: dict[str, str | int | None] = {
+        GuestFieldKey.ALLOWED_COMPANIONS.value: 0,
+        field_key.value: value,
+    }
+    return not validate_guest_values(candidate, [field_policy], event_companion_maximum)
+
+
+def _semantic_text(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def _cell_is_formula(cell: Cell) -> bool:

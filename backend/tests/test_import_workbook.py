@@ -162,7 +162,7 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
             [
                 ["Full Name", "Invitation Type", "Allowed Companions"],
                 ["Synthetic Formula Guest", '=UPPER("family")', 0],
-                ["Total Guests", None, "=COUNTA(A2:A2)"],
+                [None, "Closing constellation reckoning", "=COUNTA(A2:A2)"],
             ]
         )
     )
@@ -283,19 +283,17 @@ def test_numeric_phone_remains_rejected_when_excel_formatting_is_unrecoverable()
 
 
 @pytest.mark.parametrize(
-    "label",
+    ("label", "formula"),
     [
-        "TOTAL",
-        "TOTAL GUESTS",
-        "GUEST TOTAL",
-        "TOTAL NUMBER",
-        "OVERALL TOTAL",
-        "TOTAL NUMBER OF GUESTS",
-        "GUEST COUNT",
-        "SUMMARY",
+        ("Attendance constellation reckoning", "=SUM(D2:D2)"),
+        ("Closing roster constellation", "=COUNT(D2:D2)"),
+        ("Gathering census ledger", "=COUNTA(B2:B2)"),
     ],
 )
-def test_terminal_sparse_aggregate_footer_uses_compositional_label_tokens(label: str) -> None:
+def test_terminal_sparse_aggregate_footer_is_independent_of_label_vocabulary(
+    label: str,
+    formula: str,
+) -> None:
     result = parse(
         simple_workbook(
             [
@@ -306,7 +304,7 @@ def test_terminal_sparse_aggregate_footer_uses_compositional_label_tokens(label:
                     "Allowed Companions",
                 ],
                 [None, "Synthetic Guest", "Family", 1],
-                [label, None, None, "=SUM(D2:D2)"],
+                [label, None, None, formula],
             ]
         )
     )
@@ -362,13 +360,13 @@ def test_terminal_footer_label_in_mapped_invitation_type_is_structural() -> None
     assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 1
 
 
-def test_terminal_footer_label_in_another_mapped_column_is_structural() -> None:
+def test_terminal_unknown_footer_label_in_mapped_invitation_type_is_structural() -> None:
     result = parse(
         simple_workbook(
             [
-                ["Allowed Companions", "Full Name", "Invitation Type", "Category"],
-                [1, "Synthetic Guest", "Family", "Friends"],
-                ["=SUM(A2:A2)", None, None, "Total Guests"],
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest", "Family"],
+                ["=SUM(A2:A2)", None, "Uncatalogued constellation reckoning"],
             ]
         )
     )
@@ -377,13 +375,39 @@ def test_terminal_footer_label_in_another_mapped_column_is_structural() -> None:
     assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
 
 
-def test_approximate_footer_label_is_not_fuzzily_classified() -> None:
+def test_unknown_footer_wording_does_not_require_fuzzy_matching() -> None:
     result = parse(
         simple_workbook(
             [
                 ["Allowed Companions", "Full Name", "Invitation Type"],
                 [1, "Synthetic Guest", "Family"],
                 ["=SUM(A2:A2)", None, "Approximate guest totals note"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=UPPER(A2)",
+        "=SUM(A1:A1)",
+        "=SUM(B2:B2)",
+        "=SUM(A2:B2)",
+        "=SUM(A2:A3)",
+        "=SUM(AAAAAA2:AAAAAA2)",
+    ],
+)
+def test_terminal_unrelated_or_nonpreceding_formula_remains_candidate(formula: str) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest", "Family"],
+                [formula, None, "Closing constellation reckoning"],
             ]
         )
     )
@@ -427,9 +451,10 @@ def test_terminal_summary_label_with_guest_field_evidence_remains_candidate(
 @pytest.mark.parametrize(
     "footer_row",
     [
-        ["=SUM(A2:A2)", None, "VIP", None],
+        ["=SUM(A2:A2)", None, "Family", None],
         ["=SUM(A2:A2)", "Synthetic Formula Guest", None, None],
         ["=SUM(A2:A2)", "Total Anderson", None, None],
+        ["=SUM(A2:A2)", None, "Grand Total", "T-9"],
         ["=SUM(A2:A2)", None, "Grand Total", "Meaningful guest category"],
     ],
 )
@@ -448,6 +473,52 @@ def test_terminal_formula_rows_with_meaningful_guest_evidence_remain_candidates(
 
     assert [row.source_row_number for row in result.rows] == [2, 3]
     assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[1])
+
+
+@pytest.mark.parametrize(
+    ("guest_field_header", "guest_evidence", "expected_error"),
+    [
+        ("Phone Number", "+25512", "INVALID_PHONE"),
+        ("Email", "incomplete@", "INVALID_EMAIL"),
+    ],
+)
+def test_terminal_malformed_but_guest_like_evidence_remains_candidate(
+    guest_field_header: str,
+    guest_evidence: str,
+    expected_error: str,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Allowed Companions",
+                    "Full Name",
+                    "Invitation Type",
+                    guest_field_header,
+                ],
+                [1, "Synthetic Guest", "Family", None],
+                ["=SUM(A2:A2)", None, None, guest_evidence],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert {"FORMULA_NOT_ALLOWED", expected_error} <= error_codes(result.rows[1])
+
+
+def test_terminal_malformed_full_name_remains_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Allowed Companions", "Full Name", "Invitation Type"],
+                [1, "Synthetic Guest", "Family"],
+                ["=SUM(A2:A2)", "X" * 161, None],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert {"FORMULA_NOT_ALLOWED", "INVALID_TEXT"} <= error_codes(result.rows[1])
 
 
 def test_non_terminal_footer_signature_remains_candidate() -> None:
@@ -479,6 +550,21 @@ def test_incomplete_genuine_guest_at_end_remains_candidate() -> None:
 
     assert [row.source_row_number for row in result.rows] == [2, 3]
     assert "REQUIRED" in error_codes(result.rows[1])
+
+
+def test_table_and_companion_fields_keep_explicit_semantics() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions", "Table Number"],
+                ["Synthetic Semantic Guest", "Family", 2, 20],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] == 2
+    assert result.rows[0].values["table_number"] == "20"
+    assert result.rows[0].validation_errors == []
 
 
 def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:

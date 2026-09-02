@@ -22,7 +22,7 @@ from app.db.runtime import DatabaseRuntime
 from app.main import create_app
 from app.models.administrator import Administrator
 from app.models.event import Event
-from app.models.imports import ImportBatch, ImportBatchRow, ImportRowRevision
+from app.models.imports import ImportBatch, ImportBatchRow, ImportRowRevision, ImportRowStatus
 from app.repositories.administrators import AdministratorRepository
 from app.services.admin_provisioning import AdministratorProvisioningService
 
@@ -60,6 +60,27 @@ def synthetic_workbook() -> bytes:
     worksheet.append([None, "Synthetic Valid Two", 0, "Individual", None, "+255700000022", "A1"])
     worksheet.append([None, "Synthetic Duplicate", 1, "Family", "ONE@example.test", None, 12])
     worksheet.append([None, None, "=COUNTA(B4:B7)", "Grand Total", None, None, None])
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def contextual_footer_workbook() -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Synthetic Contextual Footer"
+    worksheet.merge_cells("A1:D1")
+    worksheet["A1"] = "Synthetic Wedding Guest Register"
+    worksheet.merge_cells("A2:D2")
+    worksheet["A2"] = "Synthetic Import Preview"
+    worksheet.append([])
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions", "Category"])
+    worksheet.append(["Synthetic Context One", "Family", 2, "Friends"])
+    worksheet.append(["Synthetic Context Two", "Individual", 0, "Colleagues"])
+    worksheet.append(["Synthetic Context Three", "Family", 1, None])
+    worksheet.append([None, "Closing constellation reckoning", "=COUNTA(A5:A7)", None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -257,6 +278,58 @@ async def exercise_import_api(
         )
         assert guests_before_progress.status_code == 200
         assert guests_before_progress.json()["items"] == []
+
+        contextual_event = await client.post(
+            "/api/v1/events",
+            headers=headers,
+            json={**event_payload, "event_name": "Synthetic Contextual Footer Wedding"},
+        )
+        assert contextual_event.status_code == 201
+        contextual_event_id = contextual_event.json()["id"]
+        contextual_upload = await client.post(
+            f"/api/v1/events/{contextual_event_id}/imports",
+            headers=headers,
+            files={
+                "workbook": (
+                    "synthetic-contextual-footer.xlsx",
+                    contextual_footer_workbook(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert contextual_upload.status_code == 201, contextual_upload.text
+        contextual_body = contextual_upload.json()
+        contextual_batch_id = contextual_body["id"]
+        assert contextual_body["reconciliation"] == {
+            "actual_guest_rows_discovered": 3,
+            "ignored_non_data_rows": 4,
+            "currently_valid_staged_rows": 3,
+            "currently_invalid_staged_rows": 0,
+            "duplicates": 0,
+            "pending_revalidation": 0,
+            "rows_already_imported": 0,
+            "newly_importable_rows": 3,
+            "remaining_unresolved_rows": 0,
+            "guests_created_from_batch": 0,
+            "overall_batch_state": "VALIDATED",
+        }
+        contextual_rows = await client.get(
+            f"/api/v1/events/{contextual_event_id}/imports/{contextual_batch_id}/rows",
+            headers=headers,
+        )
+        assert contextual_rows.status_code == 200
+        assert [item["source_row_number"] for item in contextual_rows.json()["items"]] == [
+            5,
+            6,
+            7,
+        ]
+        assert all(item["validation_errors"] == [] for item in contextual_rows.json()["items"])
+        contextual_guests = await client.get(
+            f"/api/v1/events/{contextual_event_id}/guests?limit=100&offset=0",
+            headers=headers,
+        )
+        assert contextual_guests.status_code == 200
+        assert contextual_guests.json()["items"] == []
 
         first_progress = await client.post(
             f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
@@ -480,6 +553,8 @@ async def exercise_import_api(
             "second_event_id": second_event.json()["id"],
             "batch_id": batch_id,
             "row_id": row_id,
+            "contextual_event_id": contextual_event_id,
+            "contextual_batch_id": contextual_batch_id,
         }
 
 
@@ -507,6 +582,30 @@ def test_m4_schema_api_correction_reimport_and_immutability(
             administrator_id = administrator.id
 
         identifiers = asyncio.run(exercise_import_api(settings, runtime, username))
+
+        with Session(engine) as session:
+            contextual_batch = session.get(
+                ImportBatch,
+                UUID(identifiers["contextual_batch_id"]),
+            )
+            assert contextual_batch is not None
+            assert contextual_batch.event_id == UUID(identifiers["contextual_event_id"])
+            assert contextual_batch.candidate_row_count == 3
+            assert contextual_batch.ignored_row_count == 4
+            ignored_rows = contextual_batch.structure_snapshot["ignored_rows"]
+            assert [item["reason"] for item in ignored_rows].count("PRESENTATION") == 2
+            assert [item["reason"] for item in ignored_rows].count("BLANK") == 1
+            assert [item["reason"] for item in ignored_rows].count("FOOTER") == 1
+            contextual_rows = list(
+                session.execute(
+                    select(ImportBatchRow)
+                    .where(ImportBatchRow.batch_id == contextual_batch.id)
+                    .order_by(ImportBatchRow.source_row_number)
+                ).scalars()
+            )
+            assert [row.source_row_number for row in contextual_rows] == [5, 6, 7]
+            assert all(row.status is ImportRowStatus.VALID for row in contextual_rows)
+            assert all(row.validation_errors == [] for row in contextual_rows)
 
         inspector = inspect(engine)
         assert {"import_batches", "import_batch_rows", "import_row_revisions"} <= set(
@@ -551,7 +650,7 @@ def test_m4_schema_api_correction_reimport_and_immutability(
             session.rollback()
 
         evidence_files = list(settings.IMPORT_EVIDENCE_STORAGE_ROOT.rglob("*.xlsx"))
-        assert len(evidence_files) == 9
+        assert len(evidence_files) == 10
         assert all("synthetic.xlsx" not in path.name for path in evidence_files)
     finally:
         runtime.close()
