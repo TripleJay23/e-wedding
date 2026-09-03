@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail-closed repository and distribution privacy audits for local use and CI."""
 
 from __future__ import annotations
