@@ -20,6 +20,7 @@ from app.services.admin_provisioning import (
     AdministratorProvisioningConflictError,
     AdministratorProvisioningService,
 )
+from tests.synthetic_paths import synthetic_private_storage_settings
 
 SYNTHETIC_AUTH_SETTINGS = {
     "JWT_SECRET": "synthetic-jwt-signing-secret-at-least-32-bytes",
@@ -136,8 +137,7 @@ def test_bootstrap_refuses_non_development_before_database_access(
     settings = Settings(
         APP_ENV=AppEnvironment.STAGING,
         DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@db/wedding_ecard_staging",
-        PRIVATE_STORAGE_ROOT="C:/private",
-        IMPORT_EVIDENCE_STORAGE_ROOT="C:/private/evidence",
+        **synthetic_private_storage_settings(),
         **SYNTHETIC_AUTH_SETTINGS,
     )
     credentials = AdministratorBootstrapSettings(

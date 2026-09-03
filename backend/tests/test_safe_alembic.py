@@ -8,6 +8,7 @@ import pytest
 from app.cli import disposable_alembic, safe_alembic
 from app.core.settings import AppEnvironment, Settings
 from app.db.guards import DatabaseSafetyError
+from tests.synthetic_paths import synthetic_private_storage_settings
 
 SYNTHETIC_AUTH_SETTINGS = {
     "JWT_SECRET": "synthetic-jwt-signing-secret-at-least-32-bytes",
@@ -53,8 +54,7 @@ def test_execute_refuses_staging_mutation_before_engine_creation(
     settings = Settings(
         APP_ENV=AppEnvironment.STAGING,
         DATABASE_URL="postgresql+psycopg://wedding_app:synthetic@db/wedding_ecard_staging",
-        PRIVATE_STORAGE_ROOT="C:/private",
-        IMPORT_EVIDENCE_STORAGE_ROOT="C:/private/evidence",
+        **synthetic_private_storage_settings(),
         **SYNTHETIC_AUTH_SETTINGS,
     )
     args = argparse.Namespace(command="upgrade", revision="head")

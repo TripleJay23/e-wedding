@@ -14,6 +14,7 @@ from app.db.guards import (
     validated_database_url,
     verify_connected_database,
 )
+from tests.synthetic_paths import synthetic_private_storage_settings
 
 SYNTHETIC_AUTH_SETTINGS = {
     "JWT_SECRET": "synthetic-jwt-signing-secret-at-least-32-bytes",
@@ -29,10 +30,7 @@ def settings_for(environment: AppEnvironment, database_url: str) -> Settings:
         **SYNTHETIC_AUTH_SETTINGS,
     }
     if environment in {AppEnvironment.STAGING, AppEnvironment.PRODUCTION}:
-        values.update(
-            PRIVATE_STORAGE_ROOT="C:/private",
-            IMPORT_EVIDENCE_STORAGE_ROOT="C:/private/import-evidence",
-        )
+        values.update(synthetic_private_storage_settings())
     return Settings(**values)
 
 

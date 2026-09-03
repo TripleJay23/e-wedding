@@ -164,11 +164,11 @@ def _text_layer(
         "id": layer_id,
         "z_index": z_index,
         "type": "TEXT",
-        "frame": _frame(320, y, 800, 90),
+        "frame": _frame(120, y, 1000, 100),
         "content": content,
         "style": {
             "font_key": "body",
-            "font_size": 40,
+            "font_size": 32,
             "color_hex": "#243026",
             "letter_spacing": letter_spacing,
             "line_height": 1.0,
@@ -176,8 +176,8 @@ def _text_layer(
             "vertical_alignment": "CENTER",
         },
         "fitting": {
-            "minimum_font_size": 12,
-            "maximum_font_size": 40,
+            "minimum_font_size": 10,
+            "maximum_font_size": 32,
             "character_limit": 100,
         },
     }
