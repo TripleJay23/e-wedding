@@ -7,8 +7,10 @@ and reporting platform. Its accepted backend uses FastAPI and PostgreSQL.
 
 Backend capabilities through reporting have completed the continuous staging
 acceptance journey. Repository cleanup and legacy-repository retirement are
-complete, and the final local rename is complete. The repository has not been
-published, and Flutter work has not started.
+complete, the final local rename is complete, and `main` has been promoted. A
+private GitHub repository is established with `main`, `staging`, and `dev`
+published. GitHub Engineering Automation is the next phase; GitHub Actions has not
+yet been implemented, and Flutter work has not started.
 
 ## Capabilities
 

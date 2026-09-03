@@ -1,7 +1,8 @@
 # e-Wedding Repository Setup
 
-The local repository slug is `e-wedding`; publication and remote configuration
-remain separately controlled.
+The local repository slug is `e-wedding`. Its private GitHub repository is
+configured, and `main`, `staging`, and `dev` have been pushed. Future remote
+changes, pushes, and any public publication remain separately controlled.
 
 ## Prerequisites
 
@@ -17,8 +18,8 @@ remain separately controlled.
 feature/* -> dev -> staging -> main
 ```
 
-New work starts from accepted `dev`. The user controls remote configuration and
-publication; local setup must not invent or modify remotes.
+New work starts from accepted `dev`. The user controls future remote changes,
+pushes, and publication; local setup must not invent or modify remotes.
 
 ## Tracked foundation
 

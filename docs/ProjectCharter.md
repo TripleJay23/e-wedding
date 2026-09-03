@@ -8,10 +8,17 @@ journey and a future mobile administrator/gate client.
 
 ## Current state
 
-Backend functionality through reports has passed the continuous staging replay and
-release gate. Repository cleanup, legacy-repository retirement, and the final local
-rename to `e-wedding` are complete. Main promotion, publication, and Flutter
-implementation are separate later checkpoints.
+The e-Wedding backend release is finalized. Backend functionality through reports
+passed the continuous staging replay and final release gate, and `main` was
+promoted by pure fast-forward. At the accepted technical release baseline
+`6891e644472e81d5bc3690dc9ebc53fff9511ebf`, `main`, `staging`, and `dev` were
+converged. Repository cleanup, legacy-repository retirement, and the final local
+rename to `e-wedding` are complete.
+
+A private GitHub repository is established and the three permanent branches have
+been pushed. GitHub Engineering Automation is the next engineering phase; GitHub
+Actions has not yet been implemented. Flutter remains intentionally deferred until
+the GitHub automation foundation is established.
 
 ## Primary user
 
@@ -58,7 +65,9 @@ administrator authentication -> event and guest policy -> staged Excel import
 
 ## Release completion boundary
 
-Release preparation is complete only after documentation and repository cleanup
-pass, protected/private boundaries are reverified, the final name and license are
-decided, accepted staging is promoted to `main` under an explicit checkpoint, and
-the owner authorizes any GitHub remote or push. Flutter remains subsequent work.
+Backend technical release finalization and the authorized private-repository
+baseline are complete. The accepted technical release evidence remains associated
+with `6891e644472e81d5bc3690dc9ebc53fff9511ebf`; a later documentation-only
+governance commit does not imply that the full release suite was rerun on that
+newer commit. Public licensing or publication, deployment, future remote changes
+or pushes, and Flutter implementation remain separately controlled work.

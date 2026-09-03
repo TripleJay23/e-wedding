@@ -1,9 +1,9 @@
 # Backend Milestones and Release Status
 
-Backend product milestones are complete through the full staging release gate.
-Release finalization remains sequential; a later checkpoint does not authorize an
-earlier or unrelated operation. The accepted product display name is `e-Wedding`
-and the local repository slug is `e-wedding`.
+Backend product milestones and release finalization through F7A are complete.
+GitHub Engineering Automation remains sequential; a later checkpoint does not
+authorize an earlier or unrelated operation. The accepted product display name is
+`e-Wedding` and the local repository slug is `e-wedding`.
 
 | Milestone | Durable outcome | Status |
 |---|---|---|
@@ -19,9 +19,11 @@ and the local repository slug is `e-wedding`.
 | M9 | Shared privacy-safe JSON, CSV, and XLSX reports | COMPLETE |
 | M10 | Continuous S1-S13 staging journey and full backend replay/release gate | COMPLETE |
 
-The accepted schema head is `20260821_0008`. The accepted release reference has
+The accepted schema head is `20260821_0008`. The technical release baseline is
+`6891e644472e81d5bc3690dc9ebc53fff9511ebf`; its accepted release verification has
 537 passed tests, 4 deliberate staging-only skips, and 91.12% branch-aware
-coverage.
+coverage. Later documentation-only governance commits do not represent a rerun of
+that release suite.
 
 ## Release finalization
 
@@ -34,8 +36,15 @@ coverage.
 | F4 | Final-name decision and controlled rename plan | COMPLETE |
 | F5 | Local filesystem, display-branding, and package-metadata rename to e-Wedding | COMPLETE |
 | F5 live verification/integration | Review and integrate the accepted rename without widening scope | COMPLETE |
-| F6 | Final backend release verification and main promotion gate | CURRENT — PENDING VERIFICATION |
+| F6 | Final backend release verified and main promotion approved | PASS |
+| F7A | Main promotion by pure fast-forward and permanent-branch convergence | PASS |
+| GitHub private repository baseline | Private `e-wedding` repository configured | COMPLETE |
+| Permanent branch publication | `main`, `staging`, and `dev` pushed | COMPLETE |
+| G1 | GitHub Actions CI architecture and repository readiness | CURRENT |
+| G2 | GitHub Actions CI implementation | NEXT IF G1 PASSES |
+| Flutter | Administrator and gate client implementation | NOT STARTED |
 
-The public license, public sample strategy, Docker identity or volume migration,
-main movement, remote configuration, push, and Flutter work require their own
-explicit authorization. Do not infer them from completion of F5.
+GitHub Actions has not yet been implemented. The public license, public sample
+strategy, Docker identity or volume migration, deployment, future remote changes
+or pushes, and Flutter work require their own explicit authorization. Do not infer
+them from the private GitHub baseline or completion of F7A.
