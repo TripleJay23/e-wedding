@@ -50,12 +50,6 @@ jobs:
       JWT_SECRET: ci-only-synthetic-jwt-signing-secret-at-least-32-bytes
       JWT_ISSUER: ewedding-ci
       JWT_AUDIENCE: ewedding-ci
-      PRIVATE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private
-      IMPORT_EVIDENCE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/import-evidence
-      QR_IMAGE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/qr-codes
-      TEMPLATE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/templates
-      EVENT_PHOTO_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/event-photos
-      GENERATED_CARD_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/generated-cards
 
     steps:
       - name: Check out repository
@@ -82,6 +76,19 @@ jobs:
             backend/pyproject.toml
           cache-python: false
           prune-cache: true
+
+      - name: Initialize temporary private storage paths
+        shell: bash
+        run: |
+          private_root="$RUNNER_TEMP/e-wedding-private"
+          {
+            echo "PRIVATE_STORAGE_ROOT=$private_root"
+            echo "IMPORT_EVIDENCE_STORAGE_ROOT=$private_root/import-evidence"
+            echo "QR_IMAGE_STORAGE_ROOT=$private_root/qr-codes"
+            echo "TEMPLATE_STORAGE_ROOT=$private_root/templates"
+            echo "EVENT_PHOTO_STORAGE_ROOT=$private_root/event-photos"
+            echo "GENERATED_CARD_STORAGE_ROOT=$private_root/generated-cards"
+          } >> "$GITHUB_ENV"
 
       - name: Verify CI private-asset boundary
         run: python scripts/ci_audit.py workspace
