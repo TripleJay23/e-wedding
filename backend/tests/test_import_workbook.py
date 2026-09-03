@@ -14,6 +14,7 @@ from openpyxl import Workbook
 
 from app.imports.workbook import WorkbookParser, WorkbookRejectedError, _normalize_cell
 from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION, GuestFieldKey
+from app.models.guest import Guest
 from app.services.guest_validation import GuestFieldPolicy
 
 
@@ -50,6 +51,64 @@ def parse(content: bytes, *, policies: list[GuestFieldPolicy] | None = None):
 
 def error_codes(parsed_row) -> set[str]:
     return {item["code"] for item in parsed_row.validation_errors}
+
+
+def persistence_text_limit(field_key: GuestFieldKey) -> int:
+    length = getattr(Guest.__table__.columns[field_key.value].type, "length", None)
+    assert isinstance(length, int)
+    return length
+
+
+def contact_value_at_length(field_key: GuestFieldKey, length: int) -> str:
+    if field_key is GuestFieldKey.PHONE_NUMBER:
+        fixed_digits = "+1234567"
+        assert length >= len(fixed_digits)
+        return "+123" + (" " * (length - len(fixed_digits))) + "4567"
+    if field_key is GuestFieldKey.EMAIL:
+        suffix = "@example.test"
+        assert length > len(suffix)
+        return ("a" * (length - len(suffix))) + suffix
+    raise AssertionError(f"unsupported contact field: {field_key}")
+
+
+def workbook_with_excel_error(field_key: GuestFieldKey) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(
+        [
+            "Full Name",
+            "Phone Number",
+            "Email",
+            "Invitation Type",
+            "Allowed Companions",
+            "Table Number",
+            "Category",
+        ]
+    )
+    worksheet.append(
+        [
+            "Guest Alpha",
+            "+255700000001",
+            "alpha@example.test",
+            "Family",
+            1,
+            "A1",
+            "Friends",
+        ]
+    )
+    field_columns = {
+        GuestFieldKey.FULL_NAME: 1,
+        GuestFieldKey.PHONE_NUMBER: 2,
+        GuestFieldKey.EMAIL: 3,
+        GuestFieldKey.INVITATION_TYPE: 4,
+        GuestFieldKey.ALLOWED_COMPANIONS: 5,
+        GuestFieldKey.TABLE_NUMBER: 6,
+        GuestFieldKey.CATEGORY: 7,
+    }
+    error_cell = worksheet.cell(row=2, column=field_columns[field_key], value="#N/A")
+    assert error_cell.data_type == "e"
+    return save_workbook(workbook)
 
 
 def test_reordered_extra_columns_and_human_formatting_are_understood() -> None:
@@ -172,6 +231,208 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
     assert any(
         item["row_number"] == 3 and item["reason"] == "FOOTER" for item in result.ignored_rows
     )
+
+
+def test_terminal_malformed_guest_currently_matches_structural_footer_shape() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Guest Alpha", "Family", 1],
+                ["Guest Beta", "Individual", 0],
+                ["Guest Gamma", "Family", 1],
+                [None, "Unseen Household", "=SUM(C2:C4)"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4]
+    assert result.ignored_rows[-1] == {"row_number": 5, "reason": "FOOTER"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="terminal malformed guests are not yet protected from footer classification",
+)
+def test_terminal_malformed_guest_is_not_silently_discarded() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Guest Alpha", "Family", 1],
+                ["Guest Beta", "Individual", 0],
+                ["Guest Gamma", "Family", 1],
+                [None, "Unseen Household", "=SUM(C2:C4)"],
+            ]
+        )
+    )
+
+    candidate = next(row for row in result.rows if row.source_row_number == 5)
+    assert candidate.validation_errors
+    assert not any(item["row_number"] == 5 for item in result.ignored_rows)
+
+
+def test_merged_guest_like_row_currently_matches_presentation_shape() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append(["Guest Alpha", "Family", 1])
+    worksheet.merge_cells("A3:C3")
+    worksheet["A3"] = "Guest Beta"
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "PRESENTATION"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="merged guest-like rows are not yet protected from presentation classification",
+)
+def test_merged_guest_like_row_is_not_silently_presentation() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append(["Guest Alpha", "Family", 1])
+    worksheet.merge_cells("A3:C3")
+    worksheet["A3"] = "Guest Beta"
+
+    result = parse(save_workbook(workbook))
+
+    candidate = next(row for row in result.rows if row.source_row_number == 3)
+    assert candidate.validation_errors
+    assert not any(item["row_number"] == 3 for item in result.ignored_rows)
+
+
+def test_merged_presentation_heading_remains_structural() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.merge_cells("A1:C1")
+    worksheet["A1"] = "Synthetic Guest Register"
+    worksheet.append([])
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append(["Guest Alpha", "Family", 1])
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [4]
+    assert {"row_number": 1, "reason": "PRESENTATION"} in result.ignored_rows
+
+
+@pytest.mark.parametrize(
+    ("field_key", "currently_valid"),
+    [
+        (GuestFieldKey.FULL_NAME, True),
+        (GuestFieldKey.PHONE_NUMBER, False),
+        (GuestFieldKey.EMAIL, False),
+        (GuestFieldKey.INVITATION_TYPE, True),
+        (GuestFieldKey.ALLOWED_COMPANIONS, False),
+        (GuestFieldKey.TABLE_NUMBER, True),
+        (GuestFieldKey.CATEGORY, True),
+    ],
+)
+def test_excel_error_cell_current_validation_outcome(
+    field_key: GuestFieldKey,
+    currently_valid: bool,
+) -> None:
+    result = parse(workbook_with_excel_error(field_key))
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert (result.rows[0].validation_errors == []) is currently_valid
+    if not currently_valid:
+        assert any(item["field"] == field_key.value for item in result.rows[0].validation_errors)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Excel error-typed text cells are not yet rejected during normalization",
+)
+@pytest.mark.parametrize(
+    "field_key",
+    [
+        GuestFieldKey.FULL_NAME,
+        GuestFieldKey.INVITATION_TYPE,
+        GuestFieldKey.TABLE_NUMBER,
+        GuestFieldKey.CATEGORY,
+    ],
+)
+def test_excel_error_cell_cannot_be_valid_guest_value(field_key: GuestFieldKey) -> None:
+    result = parse(workbook_with_excel_error(field_key))
+    candidate = result.rows[0]
+
+    assert candidate.values[field_key.value] is None
+    assert any(item["field"] == field_key.value for item in candidate.validation_errors)
+
+
+@pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
+def test_contact_value_at_persistence_limit_is_accepted(field_key: GuestFieldKey) -> None:
+    limit = persistence_text_limit(field_key)
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", field_key.value],
+                ["Guest Alpha", "Family", contact_value_at_length(field_key, limit)],
+            ]
+        )
+    )
+
+    assert len(result.rows[0].values[field_key.value]) == limit
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
+@pytest.mark.parametrize("extra_characters", [1, 100])
+def test_overlength_contact_currently_reaches_valid_parser_state(
+    field_key: GuestFieldKey,
+    extra_characters: int,
+) -> None:
+    limit = persistence_text_limit(field_key)
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", field_key.value],
+                [
+                    "Guest Alpha",
+                    "Family",
+                    contact_value_at_length(field_key, limit + extra_characters),
+                ],
+            ]
+        )
+    )
+
+    assert len(result.rows[0].values[field_key.value]) == limit + extra_characters
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="contact values are not yet bounded by their persisted guest columns",
+)
+@pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
+@pytest.mark.parametrize("extra_characters", [1, 100])
+def test_contact_value_must_fit_persistence_contract(
+    field_key: GuestFieldKey,
+    extra_characters: int,
+) -> None:
+    limit = persistence_text_limit(field_key)
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", field_key.value],
+                [
+                    "Guest Alpha",
+                    "Family",
+                    contact_value_at_length(field_key, limit + extra_characters),
+                ],
+            ]
+        )
+    )
+
+    assert any(item["field"] == field_key.value for item in result.rows[0].validation_errors)
 
 
 @pytest.mark.parametrize(

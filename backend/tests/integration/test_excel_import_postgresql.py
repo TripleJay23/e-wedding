@@ -99,6 +99,24 @@ def contextual_footer_workbook() -> bytes:
     return stream.getvalue()
 
 
+def overlength_email_workbook() -> bytes:
+    email_limit = getattr(Guest.__table__.columns.email.type, "length", None)
+    assert isinstance(email_limit, int)
+    suffix = "@example.test"
+    overlength_email = ("a" * (email_limit + 1 - len(suffix))) + suffix
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Synthetic Persistence Boundary"
+    worksheet.append(["Full Name", "Invitation Type", "Email"])
+    worksheet.append(["Guest Alpha", "Family", overlength_email])
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
 def partial_retry_workbook(*, corrected: bool) -> bytes:
     workbook = Workbook()
     worksheet = workbook.active
@@ -187,6 +205,76 @@ def configure_test_environment(
     monkeypatch.setenv("PRIVATE_STORAGE_ROOT", str(private_root))
     monkeypatch.setenv("IMPORT_EVIDENCE_STORAGE_ROOT", str(private_root / "import-evidence"))
     return Settings()
+
+
+async def exercise_overlength_persistence_boundary(
+    settings: Settings,
+    runtime: DatabaseRuntime,
+    username: str,
+) -> None:
+    app = create_app(
+        settings,
+        database_runtime=runtime,
+        authentication_security=AuthenticationSecurity.from_settings(settings),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://synthetic.test") as client,
+    ):
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "synthetic administrator password"},
+        )
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        created_event = await client.post(
+            "/api/v1/events",
+            headers=headers,
+            json={
+                "event_name": "Synthetic Persistence Boundary",
+                "bride_name": "Guest Alpha",
+                "groom_name": "Guest Beta",
+                "event_datetime": "2027-06-12T14:30:00+03:00",
+                "venue": "Synthetic Hall",
+                "max_companions_per_invitation": 2,
+            },
+        )
+        assert created_event.status_code == 201
+        event_id = created_event.json()["id"]
+        upload = await client.post(
+            f"/api/v1/events/{event_id}/imports",
+            headers=headers,
+            files={
+                "workbook": (
+                    "synthetic-overlength.xlsx",
+                    overlength_email_workbook(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+        assert upload.status_code == 201
+        batch_id = upload.json()["id"]
+        rows = await client.get(
+            f"/api/v1/events/{event_id}/imports/{batch_id}/rows",
+            headers=headers,
+        )
+        assert rows.status_code == 200
+        assert len(rows.json()["items"]) == 1
+
+        progression = await client.post(
+            f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+            headers=headers,
+        )
+        assert progression.status_code == 200
+        assert progression.json()["imported_rows"] == 0
+        assert rows.json()["items"][0]["status"] != ImportRowStatus.VALID.value
+        assert any(
+            item["field"] == "email" for item in rows.json()["items"][0]["validation_errors"]
+        )
+        guests = await client.get(f"/api/v1/events/{event_id}/guests", headers=headers)
+        assert guests.status_code == 200
+        assert guests.json()["items"] == []
 
 
 async def exercise_import_api(
@@ -1573,6 +1661,55 @@ def test_valid_unlinked_correction_postgresql_state_history_duplicates_and_races
 
         assert "@example.test" not in caplog.text
         assert "synthetic administrator password" not in caplog.text
+    finally:
+        runtime.close()
+        if administrator_id is not None:
+            with Session(engine) as session:
+                events = list(
+                    session.execute(
+                        select(Event).where(Event.created_by == administrator_id)
+                    ).scalars()
+                )
+                event_ids = [event.id for event in events]
+                if event_ids:
+                    session.execute(delete(ImportBatch).where(ImportBatch.event_id.in_(event_ids)))
+                for event in events:
+                    session.delete(event)
+                session.flush()
+                administrator = session.get(Administrator, administrator_id)
+                if administrator is not None:
+                    session.delete(administrator)
+                session.commit()
+        engine.dispose()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="overlength staged contact values are not yet rejected before guest persistence",
+)
+def test_overlength_import_value_is_rejected_before_guest_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = configure_test_environment(monkeypatch, tmp_path)
+    assert disposable_alembic.main(["upgrade", "head"]) == 0
+    assert disposable_alembic.main(["check"]) == 0
+
+    assert DISPOSABLE_URL is not None
+    engine = create_engine(DISPOSABLE_URL, pool_pre_ping=True)
+    runtime = DatabaseRuntime(settings)
+    administrator_id: UUID | None = None
+    username = f"length-boundary-admin-{uuid4().hex[:8]}"
+    try:
+        security = AuthenticationSecurity.from_settings(settings)
+        with Session(engine, expire_on_commit=False) as session:
+            administrator = AdministratorProvisioningService(
+                AdministratorRepository(session),
+                security.passwords,
+            ).provision(username, "synthetic administrator password")
+            administrator_id = administrator.id
+
+        asyncio.run(exercise_overlength_persistence_boundary(settings, runtime, username))
     finally:
         runtime.close()
         if administrator_id is not None:
