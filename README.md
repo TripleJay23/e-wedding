@@ -93,7 +93,7 @@ production targets.
 
 ## Quality gate
 
-The accepted release reference is 535 passed tests, 4 deliberate staging-only
+The accepted release reference is 537 passed tests, 4 deliberate staging-only
 skips, and 91.12% branch-aware coverage. The repository also requires Ruff, format,
 compile, locked dependency, build/archive, Alembic lifecycle, Compose, privacy,
 secret, and documentation checks. See `docs/TestingStrategy.md`.

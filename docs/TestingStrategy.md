@@ -24,7 +24,7 @@ and missing or ambiguous targets. Canonical staging is never a test fallback.
 
 ## Release quality gate
 
-The accepted reference is 535 passed tests, 4 deliberate staging-only skips, and
+The accepted reference is 537 passed tests, 4 deliberate staging-only skips, and
 91.12% branch-aware coverage. Release-impacting changes require:
 
 - focused and complete backend tests with at least 90% branch-aware coverage;

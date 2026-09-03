@@ -20,7 +20,7 @@ and the local repository slug is `e-wedding`.
 | M10 | Continuous S1-S13 staging journey and full backend replay/release gate | COMPLETE |
 
 The accepted schema head is `20260821_0008`. The accepted release reference has
-535 passed tests, 4 deliberate staging-only skips, and 91.12% branch-aware
+537 passed tests, 4 deliberate staging-only skips, and 91.12% branch-aware
 coverage.
 
 ## Release finalization
