@@ -28,11 +28,13 @@ coverage.
 | Checkpoint | Outcome |
 |---|---|
 | F1 | Repository cleanup audit and finalization plan | COMPLETE |
-| F2 | Cleanup implementation, documentation reconciliation, and release-quality verification | COMPLETE |
+| F2 cleanup execution | Cleanup implementation and documentation reconciliation | COMPLETE |
+| F2 cleanup verification/integration | Release-quality verification and integration | COMPLETE |
 | F3 | Separately authorized frozen legacy-repository retirement | COMPLETE |
 | F4 | Final-name decision and controlled rename plan | COMPLETE |
 | F5 | Local filesystem, display-branding, and package-metadata rename to e-Wedding | COMPLETE |
-| F5 live verification/integration | Review and integrate the accepted rename without widening scope | NEXT |
+| F5 live verification/integration | Review and integrate the accepted rename without widening scope | COMPLETE |
+| F6 | Final backend release verification and main promotion gate | CURRENT — PENDING VERIFICATION |
 
 The public license, public sample strategy, Docker identity or volume migration,
 main movement, remote configuration, push, and Flutter work require their own
