@@ -24,6 +24,18 @@ Use fast-forward integration where required. Never push, fetch, pull, change
 remotes, force-push, rebase accepted history, or amend an accepted commit without
 explicit authorization.
 
+## Dependency automation
+
+Dependabot version updates target `dev`, entering the established promotion flow
+from `dev` to `staging` to `main`. The backend uses Dependabot's native `uv`
+ecosystem, while GitHub Actions remain pinned to immutable commit SHAs. Every
+dependency pull request requires the Backend Quality Gate and human review;
+Dependabot auto-merge is not enabled.
+
+The separately pinned uv CLI version remains a manually reviewed maintenance
+item. Automated updates for the verified PostgreSQL container image digest are
+deferred until the initial uv and GitHub Actions automation is proven.
+
 ## Failure workflow
 
 At the first confirmed defect, stop the checkpoint, distinguish product failure
