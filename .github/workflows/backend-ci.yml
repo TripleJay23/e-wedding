@@ -1,0 +1,160 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-quality:
+    name: Backend Quality Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # postgres:17-alpine (multi-platform index verified 2026-09-03)
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_DB: wedding_ecard_disposable_ci
+          POSTGRES_USER: wedding_test
+          POSTGRES_PASSWORD: ci-only-synthetic-postgres-password
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wedding_test -d wedding_ecard_disposable_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 10s
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://wedding_test:ci-only-synthetic-postgres-password@127.0.0.1:5432/wedding_ecard_disposable_ci
+      WEDDING_DISPOSABLE_DATABASE_URL: postgresql+psycopg://wedding_test:ci-only-synthetic-postgres-password@127.0.0.1:5432/wedding_ecard_disposable_ci
+      JWT_SECRET: ci-only-synthetic-jwt-signing-secret-at-least-32-bytes
+      JWT_ISSUER: ewedding-ci
+      JWT_AUDIENCE: ewedding-ci
+      PRIVATE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private
+      IMPORT_EVIDENCE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/import-evidence
+      QR_IMAGE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/qr-codes
+      TEMPLATE_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/templates
+      EVENT_PHOTO_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/event-photos
+      GENERATED_CARD_STORAGE_ROOT: ${{ runner.temp }}/e-wedding-private/generated-cards
+
+    steps:
+      - name: Check out repository
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        # v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        # v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.14"
+          enable-cache: true
+          cache-dependency-glob: |
+            backend/uv.lock
+            backend/pyproject.toml
+          cache-python: false
+          prune-cache: true
+
+      - name: Verify CI private-asset boundary
+        run: python scripts/ci_audit.py workspace
+
+      - name: Audit repository history and privacy
+        run: python scripts/ci_audit.py repository
+
+      - name: Check documentation whitespace
+        run: git diff --check
+
+      - name: Verify dependency lock
+        run: uv lock --project backend --check
+
+      - name: Synchronize locked dependencies
+        run: uv sync --project backend --all-extras --locked
+
+      - name: Run Ruff
+        run: uv run --project backend ruff check backend scripts
+
+      - name: Verify formatting
+        run: uv run --project backend ruff format --check backend scripts
+
+      - name: Compile Python sources
+        run: python -m compileall -q backend/app backend/tests backend/alembic scripts
+
+      - name: Verify Docker Compose availability
+        run: docker compose version
+
+      - name: Parse Compose configurations
+        run: |
+          docker compose --env-file .env.example -f compose.yaml config --quiet
+          docker compose --env-file .env.staging.example -f compose.staging.yaml config --quiet
+
+      - name: Verify PostgreSQL readiness
+        run: pg_isready -h 127.0.0.1 -p 5432 -U wedding_test -d wedding_ecard_disposable_ci
+
+      - name: Verify Alembic lifecycle
+        run: |
+          uv run --project backend wedding-disposable-alembic upgrade head
+          uv run --project backend wedding-disposable-alembic current
+          heads="$(uv run --project backend alembic -c backend/alembic.ini heads)"
+          test "$heads" = "20260821_0008 (head)"
+          uv run --project backend wedding-disposable-alembic check
+          uv run --project backend wedding-disposable-alembic downgrade 20260821_0007
+          uv run --project backend wedding-disposable-alembic current
+          uv run --project backend wedding-disposable-alembic upgrade head
+          uv run --project backend wedding-disposable-alembic current
+          uv run --project backend wedding-disposable-alembic check
+
+      - name: Run repository-safe backend tests
+        run: |
+          env \
+            -u APP_ENV \
+            -u DATABASE_URL \
+            -u JWT_SECRET \
+            -u JWT_ISSUER \
+            -u JWT_AUDIENCE \
+            -u PRIVATE_STORAGE_ROOT \
+            -u IMPORT_EVIDENCE_STORAGE_ROOT \
+            -u QR_IMAGE_STORAGE_ROOT \
+            -u TEMPLATE_STORAGE_ROOT \
+            -u EVENT_PHOTO_STORAGE_ROOT \
+            -u GENERATED_CARD_STORAGE_ROOT \
+            uv run --project backend python -m pytest \
+              -p no:cacheprovider \
+              --cov=app \
+              --cov-branch \
+              --cov-config=backend/pyproject.toml \
+              --cov-report=term-missing \
+              --cov-fail-under=90
+
+      - name: Build wheel and source distribution
+        run: uv build --project backend --wheel --sdist
+
+      - name: Audit distribution archives
+        run: python scripts/ci_audit.py archives backend/dist/*.whl backend/dist/*.tar.gz
