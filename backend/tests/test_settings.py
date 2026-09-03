@@ -15,6 +15,10 @@ SYNTHETIC_AUTH_SETTINGS = {
 }
 
 
+def test_default_application_name_is_e_wedding(development_settings: Settings) -> None:
+    assert development_settings.APP_NAME == "e-Wedding"
+
+
 def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "development")
     for key, value in SYNTHETIC_AUTH_SETTINGS.items():

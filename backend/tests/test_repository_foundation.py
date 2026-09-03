@@ -6,6 +6,21 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 
 
+def test_publication_facing_branding_is_e_wedding() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    pyproject = (BACKEND_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert readme.startswith("# e-Wedding\n")
+    assert 'name = "e-wedding-backend"' in pyproject
+
+    for path in (
+        REPOSITORY_ROOT / ".env.example",
+        BACKEND_ROOT / ".env.example",
+        REPOSITORY_ROOT / ".env.staging.example",
+    ):
+        assert "APP_NAME=e-Wedding" in path.read_text(encoding="utf-8")
+
+
 def test_compose_database_is_local_and_named_for_development() -> None:
     compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
 

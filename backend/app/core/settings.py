@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     APP_ENV: AppEnvironment
     DATABASE_URL: SecretStr
-    APP_NAME: str = "Wedding E-Card API"
+    APP_NAME: str = "e-Wedding"
     API_V1_PREFIX: str = "/api/v1"
     JWT_SECRET: SecretStr
     JWT_ISSUER: str = Field(min_length=1, max_length=128)

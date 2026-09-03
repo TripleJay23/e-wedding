@@ -2,9 +2,10 @@
 
 ## 1. Mission and scope
 
-Maintain a secure, deterministic, production-ready wedding e-card and guest
-validation backend. Preserve accepted behavior and keep every task within its
-explicit checkpoint. Flutter is a separate later phase.
+Maintain e-Wedding as a secure, deterministic, production-ready wedding invitation,
+e-card, guest-validation, attendance, and reporting platform. Preserve accepted
+backend behavior and keep every task within its explicit checkpoint. Flutter is a
+separate later phase.
 
 ## 2. Agent neutrality
 

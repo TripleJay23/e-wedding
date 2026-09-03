@@ -1,13 +1,14 @@
-# Wedding E-Card Backend
+# e-Wedding
 
-A secure FastAPI and PostgreSQL backend for managing a wedding event from guest
-ingestion through gate admission and reconciled reporting.
+e-Wedding is a secure wedding invitation, e-card, guest validation, attendance,
+and reporting platform. Its accepted backend uses FastAPI and PostgreSQL.
 
 ## Release status
 
 Backend capabilities through reporting have completed the continuous staging
-acceptance journey. Repository cleanup and publication preparation are in progress.
-The repository has not been renamed or published, and Flutter work has not started.
+acceptance journey. Repository cleanup and legacy-repository retirement are
+complete, and the final local rename is complete. The repository has not been
+published, and Flutter work has not started.
 
 ## Capabilities
 

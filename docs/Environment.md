@@ -1,4 +1,7 @@
-# Environment and Operations
+# e-Wedding Environment and Operations
+
+The e-Wedding display and repository names do not replace the retained database,
+JWT, CLI, Compose, container, network, or volume identities documented below.
 
 ## Environment separation
 

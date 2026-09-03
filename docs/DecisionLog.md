@@ -24,4 +24,7 @@ These durable decisions prevent contract drift.
 | JSON/CSV/XLSX reports share one privacy-bounded dataset | LOCKED |
 | Alembic is one clean linear history through `20260821_0008`; no inherited migration chain | LOCKED |
 | Development/staging database identities remain operational guardrails, not branding strings | LOCKED |
-| Repository name, public license, and synthetic publication assets require later owner decisions | OPEN PUBLICATION DECISION |
+| Repository slug is `e-wedding`; product display name is `e-Wedding` | ACCEPTED |
+| Existing Compose identities, canonical staging volume, and database identities remain unchanged during the product rename | LOCKED |
+| Operational Docker branding is deferred; the unknown legacy Docker volume remains untouched | LOCKED |
+| Public license and synthetic publication assets require later owner decisions | OPEN PUBLICATION DECISION |

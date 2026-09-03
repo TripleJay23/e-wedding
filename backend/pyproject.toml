@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "wedding-ecard-backend"
+name = "e-wedding-backend"
 version = "0.1.0"
-description = "Secure wedding e-card and guest validation backend"
+description = "e-Wedding secure invitation, guest validation, attendance, and reporting backend"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [

@@ -1,5 +1,7 @@
 # Architecture
 
+This is the implemented backend architecture for the e-Wedding platform.
+
 ## System shape
 
 ```text

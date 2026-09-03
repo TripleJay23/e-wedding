@@ -1,7 +1,7 @@
-# Backend
+# e-Wedding Backend
 
-FastAPI application, PostgreSQL migrations, and automated tests for the wedding
-e-card and guest-validation backend.
+FastAPI application, PostgreSQL migrations, and automated tests for the e-Wedding
+invitation, guest-validation, attendance, and reporting platform.
 
 Run commands from the repository root:
 

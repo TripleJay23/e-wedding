@@ -2,14 +2,16 @@
 
 ## Purpose
 
-Provide a secure, deterministic wedding e-card and guest-validation backend that
-supports the full event journey and a future mobile administrator/gate client.
+Provide e-Wedding as a secure, deterministic wedding invitation, e-card,
+guest-validation, attendance, and reporting platform that supports the full event
+journey and a future mobile administrator/gate client.
 
 ## Current state
 
 Backend functionality through reports has passed the continuous staging replay and
-release gate. Repository finalization is in progress. Main promotion, publication,
-and Flutter implementation are separate later checkpoints.
+release gate. Repository cleanup, legacy-repository retirement, and the final local
+rename to `e-wedding` are complete. Main promotion, publication, and Flutter
+implementation are separate later checkpoints.
 
 ## Primary user
 

@@ -1,4 +1,7 @@
-# Repository Setup
+# e-Wedding Repository Setup
+
+The local repository slug is `e-wedding`; publication and remote configuration
+remain separately controlled.
 
 ## Prerequisites
 
