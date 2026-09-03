@@ -280,7 +280,6 @@ def _layers() -> list[dict[str, object]]:
                     [{"type": "JOIN_NAMES", "separator": "AMPERSAND"}],
                 )
             ],
-            alignment="LEFT",
         ),
         _text_layer(
             "date_weekday",

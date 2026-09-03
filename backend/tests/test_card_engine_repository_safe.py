@@ -89,6 +89,29 @@ def test_generic_renderer_runs_without_private_assets(synthetic_storage) -> None
         assert image.size == (1240, 1748)
 
 
+def test_repository_safe_text_alignment_branches_remain_contained(
+    synthetic_storage,
+) -> None:
+    package, _ = synthetic_storage
+    manifest = copy.deepcopy(dict(package.manifest))
+    couple_layer = next(layer for layer in manifest["layers"] if layer["id"] == "couple_names")
+    couple_layer["content"] = [{"type": "LITERAL", "text": "HARBOR"}]
+    couple_layer["style"]["horizontal_alignment"] = "LEFT"
+    candidate = copy.copy(package)
+    object.__setattr__(candidate, "manifest", MappingProxyType(manifest))
+
+    layouts = ManifestRenderer().measure_text_layouts(candidate, synthetic_placeholders())
+    left = layouts["couple_names"]
+    right = layouts["date_weekday"]
+
+    assert left.origin_x == left.frame_bounds[0]
+    assert left.frame_bounds[0] <= left.ink_bounds[0] <= left.ink_bounds[2]
+    assert left.ink_bounds[2] <= left.frame_bounds[2]
+    assert right.origin_x + right.advance_width == pytest.approx(right.frame_bounds[2])
+    assert right.frame_bounds[0] <= right.ink_bounds[0] <= right.ink_bounds[2]
+    assert right.ink_bounds[2] <= right.frame_bounds[2]
+
+
 @pytest.mark.parametrize(
     ("fit", "focus_x", "focus_y", "zoom"),
     [
