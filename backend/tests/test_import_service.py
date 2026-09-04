@@ -597,6 +597,96 @@ def test_safe_alias_and_companion_text_upload_and_progress_canonically() -> None
     assert guests.items[0].table_number == "02"
 
 
+def test_noisy_workbook_upload_preserves_corrections_and_progresses_valid_rows() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Noisy Guest Region"
+    worksheet.append(["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append([None, "Synthetic First", "Family", 1])
+    worksheet.append([])
+    worksheet.append(["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append([None, "Synthetic Second", "Individual", 0])
+    worksheet.append([None, "Synthetic Correctable", None, 0])
+    worksheet.append(["Structural reckoning", None, None, "=SUM(D2:D6)"])
+    worksheet.append(["Synthetic unresolved note", None, None, None])
+    content = save_synthetic_workbook(workbook)
+
+    service, events, guests, imports, _, _ = build_service(
+        parsed_workbook(parsed_row(2, guest_values("unused")))
+    )
+    service._parser = WorkbookParser(maximum_candidate_rows=5_000)
+    service._maximum_workbook_bytes = len(content) + 1
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-noisy-region.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=content,
+    )
+    rows = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)
+
+    assert batch.candidate_row_count == 4
+    assert batch.ignored_row_count == 3
+    assert [item["reason"] for item in batch.structure_snapshot["ignored_rows"]] == [
+        "BLANK",
+        "REPEATED_HEADER",
+        "FOOTER",
+    ]
+    assert [row.status for row in rows] == [
+        ImportRowStatus.VALID,
+        ImportRowStatus.VALID,
+        ImportRowStatus.INVALID,
+        ImportRowStatus.INVALID,
+    ]
+    assert service.reconcile(events.event.id, batch.id) == {
+        "actual_guest_rows_discovered": 4,
+        "ignored_non_data_rows": 3,
+        "currently_valid_staged_rows": 2,
+        "currently_invalid_staged_rows": 2,
+        "duplicates": 0,
+        "pending_revalidation": 0,
+        "rows_already_imported": 0,
+        "newly_importable_rows": 2,
+        "remaining_unresolved_rows": 2,
+        "guests_created_from_batch": 0,
+        "overall_batch_state": "VALIDATED",
+    }
+
+    corrected = service.correct_row(
+        events.event.id,
+        batch.id,
+        rows[2].id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"invitation_type": "Family"},
+    )
+    assert corrected.status is ImportRowStatus.PENDING_REVALIDATION
+    assert (
+        service.revalidate_row(
+            events.event.id,
+            batch.id,
+            rows[2].id,
+            administrator_id=events.event.created_by,
+        ).status
+        is ImportRowStatus.VALID
+    )
+
+    progressed = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+    )
+
+    assert progressed == {"imported_rows": 3, "invalidated_rows": 0, "duplicate_rows": 0}
+    assert len(guests.items) == 3
+    assert imports.list_rows(batch.id, row_status=ImportRowStatus.INVALID, limit=10, offset=0) == [
+        rows[3]
+    ]
+
+
 def test_unsupported_companion_text_remains_correctable_and_revalidatable() -> None:
     workbook = Workbook()
     worksheet = workbook.active

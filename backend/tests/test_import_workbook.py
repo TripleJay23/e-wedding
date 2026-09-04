@@ -223,6 +223,27 @@ def test_unknown_only_row_is_preserved_as_invalid_not_discarded() -> None:
     assert error_codes(result.rows[1]) == {"REQUIRED"}
 
 
+@pytest.mark.parametrize("blank_count", [1, 2, 3])
+def test_blank_gaps_never_terminate_guest_traversal(blank_count: int) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type"],
+                *([[]] * blank_count),
+                ["Synthetic After Gap", "Family"],
+                [],
+                ["Synthetic Final", "Individual"],
+            ]
+        )
+    )
+
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic After Gap",
+        "Synthetic Final",
+    ]
+    assert [item["reason"] for item in result.ignored_rows].count("BLANK") == blank_count + 1
+
+
 def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored() -> None:
     result = parse(
         simple_workbook(
@@ -595,6 +616,99 @@ def test_terminal_sparse_aggregate_footer_is_independent_of_label_vocabulary(
     )
 
 
+def test_multiple_formula_footers_are_independently_structural() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                [None, "Synthetic One", "Family", 1],
+                [None, "Synthetic Two", "Individual", 0],
+                ["Companion reckoning", None, None, "=SUM(D2:D3)"],
+                ["Guest reckoning", None, None, "=COUNTA(B2:B3)"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 2
+
+
+def test_aggregate_formula_outside_companion_output_remains_a_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                [None, "Synthetic Guest", "Family", 1],
+                ["Unresolved formula row", "=COUNTA(B2:B2)", None, None],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert {"FORMULA_NOT_ALLOWED", "REQUIRED"} <= error_codes(result.rows[-1])
+    assert not any(item["reason"] == "FOOTER" for item in result.ignored_rows)
+
+
+@pytest.mark.parametrize("note_before_footer", [False, True])
+def test_unmapped_note_remains_visible_around_a_formula_footer(
+    note_before_footer: bool,
+) -> None:
+    guest = [None, "Synthetic Guest", "Family", 1]
+    note = ["Synthetic administrative reminder", None, None, None]
+    footer = ["Structural reckoning", None, None, "=SUM(D2:D2)"]
+    tail = [note, footer] if note_before_footer else [footer, note]
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                guest,
+                *tail,
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3 if note_before_footer else 4]
+    assert error_codes(result.rows[-1]) == {"REQUIRED"}
+    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 1
+
+
+def test_malformed_guest_between_formula_footers_remains_visible() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                [None, "Synthetic Guest", "Family", 1],
+                ["First reckoning", None, None, "=SUM(D2:D2)"],
+                [None, "Synthetic Needs Correction", None, 0],
+                ["Second reckoning", None, None, "=COUNTA(B2:B4)"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 4]
+    assert error_codes(result.rows[-1]) == {"REQUIRED"}
+    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 2
+
+
+def test_guest_after_formula_footer_is_still_a_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                [None, "Synthetic Before", "Family", 1],
+                ["Interim reckoning", None, None, "=SUM(D2:D2)"],
+                [None, "Synthetic After", "Individual", 0],
+            ]
+        )
+    )
+
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic Before",
+        "Synthetic After",
+    ]
+    assert {"row_number": 3, "reason": "FOOTER"} in result.ignored_rows
+
+
 def test_summary_like_text_without_aggregate_formula_remains_candidate() -> None:
     result = parse(
         simple_workbook(
@@ -721,6 +835,43 @@ def test_sparse_rows_with_only_canonical_evidence_remain_candidates() -> None:
 
     assert [row.source_row_number for row in result.rows] == [2, 3, 4, 5]
     assert all("REQUIRED" in error_codes(row) for row in result.rows[1:])
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        (0, "Synthetic Name Only"),
+        (1, "Family"),
+        (2, "T-8"),
+        (3, "Colleagues"),
+        (4, "+255700000088"),
+        (5, "sparse@example.test"),
+        (6, 1),
+    ],
+)
+def test_every_sparse_canonical_field_remains_a_candidate(column: int, value: object) -> None:
+    sparse = [None] * 7
+    sparse[column] = value
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Full Name",
+                    "Invitation Type",
+                    "Table Number",
+                    "Category",
+                    "Phone Number",
+                    "Email",
+                    "Allowed Companions",
+                ],
+                ["Synthetic Anchor", "Family", None, None, None, None, 0],
+                sparse,
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "REQUIRED" in error_codes(result.rows[-1])
 
 
 @pytest.mark.parametrize(
@@ -900,7 +1051,7 @@ def test_table_and_companion_fields_keep_explicit_semantics() -> None:
     assert result.rows[0].validation_errors == []
 
 
-def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:
+def test_sparse_guest_after_structural_formula_footer_remains_visible() -> None:
     result = parse(
         simple_workbook(
             [
@@ -919,11 +1070,11 @@ def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:
         )
     )
 
-    assert [row.source_row_number for row in result.rows] == [2, 3, 4, 5]
+    assert [row.source_row_number for row in result.rows] == [2, 3, 5]
     assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[0])
     assert "REQUIRED" in error_codes(result.rows[1])
-    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[2])
-    assert "REQUIRED" in error_codes(result.rows[3])
+    assert "REQUIRED" in error_codes(result.rows[2])
+    assert {"row_number": 4, "reason": "FOOTER"} in result.ignored_rows
 
 
 def test_normalized_alias_registry_is_collision_free() -> None:
@@ -1423,6 +1574,68 @@ def test_repeated_header_inside_one_data_region_is_not_a_competing_table() -> No
         "Synthetic Second",
     ]
     assert {item["reason"] for item in result.ignored_rows} == {"REPEATED_HEADER"}
+
+
+def test_reordered_repeated_header_updates_the_continuing_column_mapping() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Email"],
+                ["Synthetic First", "Family", "first@example.test"],
+                ["Email", "Full Name", "Invitation Type"],
+                ["second@example.test", "Synthetic Second", "Individual"],
+            ]
+        )
+    )
+
+    assert result.header_row_number == 1
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic First",
+        "Synthetic Second",
+    ]
+    assert result.rows[-1].values["email"] == "second@example.test"
+    assert result.rows[-1].validation_errors == []
+    assert result.ignored_rows == ({"row_number": 3, "reason": "REPEATED_HEADER"},)
+
+
+def test_repeated_header_may_omit_optional_columns_after_a_blank_separator() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Email", "Table Number"],
+                ["Synthetic First", "Family", "first@example.test", "T-1"],
+                [],
+                ["Invitation Type", "Full Name", "Unmanaged Extra"],
+                ["Individual", "Synthetic Second", "ignored source content"],
+            ]
+        )
+    )
+
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic First",
+        "Synthetic Second",
+    ]
+    assert result.rows[-1].values["email"] is None
+    assert result.rows[-1].values["table_number"] is None
+    assert result.rows[-1].validation_errors == []
+    assert {"row_number": 3, "reason": "BLANK"} in result.ignored_rows
+    assert {"row_number": 4, "reason": "REPEATED_HEADER"} in result.ignored_rows
+
+
+def test_partial_header_like_row_remains_a_visible_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Email"],
+                ["Synthetic Guest", "Family", "guest@example.test"],
+                ["Full Name", None, None],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert result.rows[-1].values["full_name"] == "Full Name"
+    assert error_codes(result.rows[-1]) == {"REQUIRED"}
 
 
 def test_invalid_rows_with_mapped_occupancy_contribute_to_table_viability() -> None:

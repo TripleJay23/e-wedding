@@ -103,6 +103,7 @@ def contextual_footer_workbook() -> bytes:
     worksheet.append([None, "Synthetic Context Two", "Individual", 0, "Colleagues"])
     worksheet.append([None, "Synthetic Context Three", "Family", 1, None])
     worksheet.append(["Closing constellation reckoning", None, None, "=COUNTA(B5:B7)", None])
+    worksheet.append(["Secondary constellation reckoning", None, None, "=COUNTA(B5:B7)", None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -459,7 +460,7 @@ async def exercise_import_api(
         contextual_batch_id = contextual_body["id"]
         assert contextual_body["reconciliation"] == {
             "actual_guest_rows_discovered": 3,
-            "ignored_non_data_rows": 4,
+            "ignored_non_data_rows": 5,
             "currently_valid_staged_rows": 3,
             "currently_invalid_staged_rows": 0,
             "duplicates": 0,
@@ -1132,11 +1133,11 @@ def test_m4_schema_api_correction_reimport_and_immutability(
             assert contextual_batch is not None
             assert contextual_batch.event_id == UUID(identifiers["contextual_event_id"])
             assert contextual_batch.candidate_row_count == 3
-            assert contextual_batch.ignored_row_count == 4
+            assert contextual_batch.ignored_row_count == 5
             ignored_rows = contextual_batch.structure_snapshot["ignored_rows"]
             assert [item["reason"] for item in ignored_rows].count("PRESENTATION") == 2
             assert [item["reason"] for item in ignored_rows].count("BLANK") == 1
-            assert [item["reason"] for item in ignored_rows].count("FOOTER") == 1
+            assert [item["reason"] for item in ignored_rows].count("FOOTER") == 2
             contextual_rows = list(
                 session.execute(
                     select(ImportBatchRow)

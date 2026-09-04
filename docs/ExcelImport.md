@@ -90,6 +90,18 @@ Must handle:
 - gaps/blank required values inside genuine guest rows
 
 Never hide a malformed guest simply because it occurs at the bottom of the sheet.
+Post-header traversal continues through the bounded worksheet even after blanks,
+presentation separators, repeated headers, or proven footers. A deterministic
+repeated header may reorder the selected canonical fields or omit optional fields;
+its mapping applies to the following section, while partial header-like rows remain
+guest candidates.
+
+Formula-backed footers are classified row by row rather than by starting a
+one-way footer region. Each footer requires exactly one supported `SUM`, `COUNT`,
+or `COUNTA` formula over preceding mapped guest rows plus one text label outside
+the active guest columns. Multiple such rows can be structural, but intervening
+malformed guests remain candidates and later guests are still traversed. Unmapped
+notes without equally strong structural evidence remain visible invalid candidates.
 
 ## Formula behavior
 

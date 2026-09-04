@@ -160,9 +160,15 @@ class _GuestTableContext:
     """Bounded semantic context accumulated from preceding candidate rows."""
 
     header_row_number: int
-    candidate_row_numbers: list[int]
+    mapped_candidate_row_numbers: list[int]
     invitation_types: set[str]
     has_strong_guest_evidence: bool = False
+
+    def start_reordered_section(self, header_row_number: int) -> None:
+        """Reset field-position evidence when a repeated header changes layout."""
+        self.header_row_number = header_row_number
+        self.mapped_candidate_row_numbers.clear()
+        self.has_strong_guest_evidence = False
 
     def observe(
         self,
@@ -170,8 +176,11 @@ class _GuestTableContext:
         values: dict[str, str | int | None],
         policies: list[GuestFieldPolicy],
         event_companion_maximum: int,
+        *,
+        has_mapped_occupancy: bool,
     ) -> None:
-        self.candidate_row_numbers.append(row_number)
+        if has_mapped_occupancy:
+            self.mapped_candidate_row_numbers.append(row_number)
         evidence = _guest_evidence(
             values,
             policies,
@@ -262,7 +271,6 @@ class WorkbookParser:
                     continue
                 sheet_candidates.append(_HeaderCandidate(worksheet, row_number, mapping))
             if sheet_candidates:
-                last_populated_row = _last_populated_row(worksheet, 1)
                 assessments = [
                     _assess_header_candidate(
                         item,
@@ -273,11 +281,10 @@ class WorkbookParser:
                             if index + 1 < len(sheet_candidates)
                             else None
                         ),
-                        last_populated_row=last_populated_row,
                     )
                     for index, item in enumerate(sheet_candidates)
                 ]
-                assessments = _collapse_repeated_header_assessments(assessments)
+                assessments = _collapse_repeated_header_assessments(assessments, required)
                 meaningful = [item for item in assessments if item.has_meaningful_guest_data]
                 if len(meaningful) > 1:
                     raise WorkbookRejectedError(
@@ -329,26 +336,39 @@ class WorkbookParser:
         parsed_rows: list[ParsedGuestRow] = []
         seen_valid_fingerprints: set[str] = set()
         aliases = _enabled_alias_lookup(set(candidate.mapping))
+        required = {policy.field_key for policy in policies if policy.enabled and policy.required}
+        selected_fields = set(candidate.mapping)
+        active_mapping = candidate.mapping
         merged_ranges = tuple(worksheet.merged_cells.ranges)
-        last_populated_row = _last_populated_row(worksheet, candidate.row_number + 1)
         context = _GuestTableContext(candidate.row_number, [], set())
 
         for row_number in range(candidate.row_number + 1, worksheet.max_row + 1):
             cells = worksheet[row_number]
+            repeated_mapping = _safe_repeated_header_mapping(
+                cells,
+                aliases=aliases,
+                selected_fields=selected_fields,
+                required_fields=required,
+            )
+            if repeated_mapping is not None:
+                ignored.append({"row_number": row_number, "reason": "REPEATED_HEADER"})
+                if repeated_mapping != active_mapping:
+                    context.start_reordered_section(row_number)
+                active_mapping = repeated_mapping
+                continue
+
             reason = _ignored_row_reason(
                 cells,
                 row_number=row_number,
-                selected_mapping=candidate.mapping,
-                aliases=aliases,
+                selected_mapping=active_mapping,
                 merged_ranges=merged_ranges,
-                is_terminal=row_number == last_populated_row,
                 context=context,
             )
             if reason is not None:
                 ignored.append({"row_number": row_number, "reason": reason})
                 continue
 
-            values, normalization_errors = _normalize_candidate(cells, candidate.mapping, policies)
+            values, normalization_errors = _normalize_candidate(cells, active_mapping, policies)
             validation_errors = validate_guest_values(
                 values,
                 policies,
@@ -372,7 +392,13 @@ class WorkbookParser:
                     identity_fingerprints=fingerprints,
                 )
             )
-            context.observe(row_number, values, policies, event_companion_maximum)
+            context.observe(
+                row_number,
+                values,
+                policies,
+                event_companion_maximum,
+                has_mapped_occupancy=_mapped_occupancy(cells, active_mapping) > 0,
+            )
             if len(parsed_rows) > self._maximum_candidate_rows:
                 raise WorkbookRejectedError(
                     "CANDIDATE_LIMIT_EXCEEDED", "workbook contains too many guest rows"
@@ -396,7 +422,6 @@ def _assess_header_candidate(
     event_companion_maximum: int,
     *,
     stop_before_row: int | None,
-    last_populated_row: int | None,
 ) -> _CandidateAssessment:
     """Probe one bounded region without using row validity as selection evidence."""
     worksheet = candidate.worksheet
@@ -410,18 +435,32 @@ def _assess_header_candidate(
     structural_rows = 0
     mapped_occupancy = 0
     aliases = _enabled_alias_lookup(set(candidate.mapping))
+    required = {policy.field_key for policy in policies if policy.enabled and policy.required}
+    selected_fields = set(candidate.mapping)
+    active_mapping = candidate.mapping
     merged_ranges = tuple(worksheet.merged_cells.ranges)
     context = _GuestTableContext(candidate.row_number, [], set())
 
     for row_number in range(probe_start, probe_end + 1):
         cells = worksheet[row_number]
+        repeated_mapping = _safe_repeated_header_mapping(
+            cells,
+            aliases=aliases,
+            selected_fields=selected_fields,
+            required_fields=required,
+        )
+        if repeated_mapping is not None:
+            structural_rows += 1
+            if repeated_mapping != active_mapping:
+                context.start_reordered_section(row_number)
+            active_mapping = repeated_mapping
+            continue
+
         reason = _ignored_row_reason(
             cells,
             row_number=row_number,
-            selected_mapping=candidate.mapping,
-            aliases=aliases,
+            selected_mapping=active_mapping,
             merged_ranges=merged_ranges,
-            is_terminal=row_number == last_populated_row,
             context=context,
         )
         if reason is not None:
@@ -429,17 +468,19 @@ def _assess_header_candidate(
             continue
 
         candidate_rows += 1
-        occupied = sum(
-            1
-            for column in candidate.mapping.values()
-            if cells[column - 1].value is not None and cells[column - 1].value != ""
-        )
+        occupied = _mapped_occupancy(cells, active_mapping)
         if occupied:
             plausible_rows += 1
             mapped_occupancy += occupied
 
-        values, _ = _normalize_candidate(cells, candidate.mapping, policies)
-        context.observe(row_number, values, policies, event_companion_maximum)
+        values, _ = _normalize_candidate(cells, active_mapping, policies)
+        context.observe(
+            row_number,
+            values,
+            policies,
+            event_companion_maximum,
+            has_mapped_occupancy=occupied > 0,
+        )
 
     return _CandidateAssessment(
         candidate=candidate,
@@ -454,14 +495,16 @@ def _assess_header_candidate(
 
 def _collapse_repeated_header_assessments(
     assessments: list[_CandidateAssessment],
+    required_fields: set[GuestFieldKey],
 ) -> list[_CandidateAssessment]:
-    """Fold an identical later header into an established guest-data region."""
+    """Fold a deterministic later header into an established guest-data region."""
     collapsed: list[_CandidateAssessment] = []
     for assessment in assessments:
         if (
             collapsed
             and collapsed[-1].has_meaningful_guest_data
-            and assessment.candidate.mapping == collapsed[-1].candidate.mapping
+            and required_fields.issubset(assessment.candidate.mapping)
+            and set(assessment.candidate.mapping).issubset(collapsed[-1].candidate.mapping)
         ):
             preceding = collapsed[-1]
             collapsed[-1] = _CandidateAssessment(
@@ -586,18 +629,12 @@ def _ignored_row_reason(
     *,
     row_number: int,
     selected_mapping: dict[GuestFieldKey, int],
-    aliases: dict[str, GuestFieldKey],
     merged_ranges: tuple[Any, ...],
-    is_terminal: bool,
     context: _GuestTableContext,
 ) -> str | None:
     populated = [cell for cell in cells if cell.value is not None and cell.value != ""]
     if not populated:
         return "BLANK"
-
-    header_mapping, duplicated = _map_header_row(cells, aliases)
-    if not duplicated and set(header_mapping) == set(selected_mapping):
-        return "REPEATED_HEADER"
 
     is_single_merged_value = len(populated) == 1 and any(
         merged.min_row <= row_number <= merged.max_row
@@ -610,7 +647,7 @@ def _ignored_row_reason(
         # when merge geometry leaves the rest of the row empty.
         return "PRESENTATION"
 
-    if is_terminal and _is_contextual_aggregate_footer(
+    if _is_contextual_aggregate_footer(
         cells,
         populated,
         row_number=row_number,
@@ -625,13 +662,6 @@ def _row_is_blank(cells: tuple[Cell, ...]) -> bool:
     return all(cell.value is None or cell.value == "" for cell in cells)
 
 
-def _last_populated_row(worksheet: Worksheet, first_row: int) -> int | None:
-    for row_number in range(worksheet.max_row, first_row - 1, -1):
-        if not _row_is_blank(worksheet[row_number]):
-            return row_number
-    return None
-
-
 def _is_contextual_aggregate_footer(
     cells: tuple[Cell, ...],
     populated: list[Cell],
@@ -640,11 +670,11 @@ def _is_contextual_aggregate_footer(
     selected_mapping: dict[GuestFieldKey, int],
     context: _GuestTableContext,
 ) -> bool:
-    """Recognize a terminal footer from independent structural and semantic evidence."""
+    """Recognize a formula footer from independent structural and semantic evidence."""
     if (
         len(populated) != 2
         or not context.has_strong_guest_evidence
-        or not context.candidate_row_numbers
+        or not context.mapped_candidate_row_numbers
     ):
         return False
 
@@ -656,7 +686,7 @@ def _is_contextual_aggregate_footer(
         aggregate_cells[0],
         footer_row_number=row_number,
         header_row_number=context.header_row_number,
-        candidate_row_numbers=context.candidate_row_numbers,
+        candidate_row_numbers=context.mapped_candidate_row_numbers,
         selected_mapping=selected_mapping,
     ):
         return False
@@ -671,6 +701,36 @@ def _is_contextual_aggregate_footer(
     # Text in a canonical guest column can be an incomplete or invalid guest
     # field. Only an independently structural, unmapped label proves a footer.
     return summary_cells[0].column not in selected_mapping.values()
+
+
+def _safe_repeated_header_mapping(
+    cells: tuple[Cell, ...],
+    *,
+    aliases: dict[str, GuestFieldKey],
+    selected_fields: set[GuestFieldKey],
+    required_fields: set[GuestFieldKey],
+) -> dict[GuestFieldKey, int] | None:
+    """Return a deterministic repeated header confined to the selected field set."""
+    mapping, duplicated = _map_header_row(cells, aliases)
+    if (
+        duplicated
+        or len(mapping) < 2
+        or not required_fields.issubset(mapping)
+        or not set(mapping).issubset(selected_fields)
+    ):
+        return None
+    return mapping
+
+
+def _mapped_occupancy(
+    cells: tuple[Cell, ...],
+    mapping: dict[GuestFieldKey, int],
+) -> int:
+    return sum(
+        1
+        for column in mapping.values()
+        if cells[column - 1].value is not None and cells[column - 1].value != ""
+    )
 
 
 def _is_supported_preceding_aggregate(
