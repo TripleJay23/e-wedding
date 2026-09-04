@@ -71,7 +71,7 @@ def synthetic_workbook() -> bytes:
     worksheet.append([None, "Synthetic Correctable", 0, None, "correct@example.test", None, 2.0])
     worksheet.append([None, "Synthetic Valid Two", 0, "Individual", None, "+255700000022", "A1"])
     worksheet.append([None, "Synthetic Duplicate", 1, "Family", "ONE@example.test", None, 12])
-    worksheet.append([None, None, "=COUNTA(B4:B7)", "Grand Total", None, None, None])
+    worksheet.append(["Grand Total", None, "=COUNTA(B4:B7)", None, None, None, None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -83,16 +83,24 @@ def contextual_footer_workbook() -> bytes:
     worksheet = workbook.active
     assert worksheet is not None
     worksheet.title = "Synthetic Contextual Footer"
-    worksheet.merge_cells("A1:D1")
+    worksheet.merge_cells("A1:E1")
     worksheet["A1"] = "Synthetic Wedding Guest Register"
-    worksheet.merge_cells("A2:D2")
+    worksheet.merge_cells("A2:E2")
     worksheet["A2"] = "Synthetic Import Preview"
     worksheet.append([])
-    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions", "Category"])
-    worksheet.append(["Synthetic Context One", "Family", 2, "Friends"])
-    worksheet.append(["Synthetic Context Two", "Individual", 0, "Colleagues"])
-    worksheet.append(["Synthetic Context Three", "Family", 1, None])
-    worksheet.append([None, "Closing constellation reckoning", "=COUNTA(A5:A7)", None])
+    worksheet.append(
+        [
+            "Unmanaged Notes",
+            "Full Name",
+            "Invitation Type",
+            "Allowed Companions",
+            "Category",
+        ]
+    )
+    worksheet.append([None, "Synthetic Context One", "Family", 2, "Friends"])
+    worksheet.append([None, "Synthetic Context Two", "Individual", 0, "Colleagues"])
+    worksheet.append([None, "Synthetic Context Three", "Family", 1, None])
+    worksheet.append(["Closing constellation reckoning", None, None, "=COUNTA(B5:B7)", None])
     stream = BytesIO()
     workbook.save(stream)
     workbook.close()

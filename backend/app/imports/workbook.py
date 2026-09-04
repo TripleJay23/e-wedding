@@ -275,8 +275,6 @@ class WorkbookParser:
                 aliases=aliases,
                 merged_ranges=merged_ranges,
                 is_terminal=row_number == last_populated_row,
-                policies=policies,
-                event_companion_maximum=event_companion_maximum,
                 context=context,
             )
             if reason is not None:
@@ -428,8 +426,6 @@ def _ignored_row_reason(
     aliases: dict[str, GuestFieldKey],
     merged_ranges: tuple[Any, ...],
     is_terminal: bool,
-    policies: list[GuestFieldPolicy],
-    event_companion_maximum: int,
     context: _GuestTableContext,
 ) -> str | None:
     populated = [cell for cell in cells if cell.value is not None and cell.value != ""]
@@ -440,12 +436,15 @@ def _ignored_row_reason(
     if not duplicated and set(header_mapping) == set(selected_mapping):
         return "REPEATED_HEADER"
 
-    if len(populated) == 1 and any(
+    is_single_merged_value = len(populated) == 1 and any(
         merged.min_row <= row_number <= merged.max_row
         and merged.min_col <= populated[0].column <= merged.max_col
         and merged.max_col > merged.min_col
         for merged in merged_ranges
-    ):
+    )
+    if is_single_merged_value and populated[0].column not in selected_mapping.values():
+        # A post-header value in a canonical column is plausible guest content even
+        # when merge geometry leaves the rest of the row empty.
         return "PRESENTATION"
 
     if is_terminal and _is_contextual_aggregate_footer(
@@ -453,8 +452,6 @@ def _ignored_row_reason(
         populated,
         row_number=row_number,
         selected_mapping=selected_mapping,
-        policies=policies,
-        event_companion_maximum=event_companion_maximum,
         context=context,
     ):
         return "FOOTER"
@@ -478,8 +475,6 @@ def _is_contextual_aggregate_footer(
     *,
     row_number: int,
     selected_mapping: dict[GuestFieldKey, int],
-    policies: list[GuestFieldPolicy],
-    event_companion_maximum: int,
     context: _GuestTableContext,
 ) -> bool:
     """Recognize a terminal footer from independent structural and semantic evidence."""
@@ -510,14 +505,9 @@ def _is_contextual_aggregate_footer(
         or _cell_is_formula(summary_cells[0])
     ):
         return False
-
-    values, _ = _normalize_candidate(cells, selected_mapping, policies)
-    return not _guest_evidence(
-        values,
-        policies,
-        event_companion_maximum,
-        known_invitation_types=context.invitation_types,
-    )
+    # Text in a canonical guest column can be an incomplete or invalid guest
+    # field. Only an independently structural, unmapped label proves a footer.
+    return summary_cells[0].column not in selected_mapping.values()
 
 
 def _is_supported_preceding_aggregate(

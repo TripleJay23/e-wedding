@@ -219,9 +219,9 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
     result = parse(
         simple_workbook(
             [
-                ["Full Name", "Invitation Type", "Allowed Companions"],
-                ["Synthetic Formula Guest", '=UPPER("family")', 0],
-                [None, "Closing constellation reckoning", "=COUNTA(A2:A2)"],
+                ["Unmanaged Notes", "Full Name", "Invitation Type", "Allowed Companions"],
+                [None, "Synthetic Formula Guest", '=UPPER("family")', 0],
+                ["Closing constellation reckoning", None, None, "=COUNTA(B2:B2)"],
             ]
         )
     )
@@ -233,27 +233,6 @@ def test_formula_guest_cells_fail_but_independently_structural_footer_is_ignored
     )
 
 
-def test_terminal_malformed_guest_currently_matches_structural_footer_shape() -> None:
-    result = parse(
-        simple_workbook(
-            [
-                ["Full Name", "Invitation Type", "Allowed Companions"],
-                ["Guest Alpha", "Family", 1],
-                ["Guest Beta", "Individual", 0],
-                ["Guest Gamma", "Family", 1],
-                [None, "Unseen Household", "=SUM(C2:C4)"],
-            ]
-        )
-    )
-
-    assert [row.source_row_number for row in result.rows] == [2, 3, 4]
-    assert result.ignored_rows[-1] == {"row_number": 5, "reason": "FOOTER"}
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="terminal malformed guests are not yet protected from footer classification",
-)
 def test_terminal_malformed_guest_is_not_silently_discarded() -> None:
     result = parse(
         simple_workbook(
@@ -268,29 +247,10 @@ def test_terminal_malformed_guest_is_not_silently_discarded() -> None:
     )
 
     candidate = next(row for row in result.rows if row.source_row_number == 5)
-    assert candidate.validation_errors
+    assert {"FORMULA_NOT_ALLOWED", "REQUIRED"} <= error_codes(candidate)
     assert not any(item["row_number"] == 5 for item in result.ignored_rows)
 
 
-def test_merged_guest_like_row_currently_matches_presentation_shape() -> None:
-    workbook = Workbook()
-    worksheet = workbook.active
-    assert worksheet is not None
-    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions"])
-    worksheet.append(["Guest Alpha", "Family", 1])
-    worksheet.merge_cells("A3:C3")
-    worksheet["A3"] = "Guest Beta"
-
-    result = parse(save_workbook(workbook))
-
-    assert [row.source_row_number for row in result.rows] == [2]
-    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "PRESENTATION"}
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="merged guest-like rows are not yet protected from presentation classification",
-)
 def test_merged_guest_like_row_is_not_silently_presentation() -> None:
     workbook = Workbook()
     worksheet = workbook.active
@@ -303,7 +263,8 @@ def test_merged_guest_like_row_is_not_silently_presentation() -> None:
     result = parse(save_workbook(workbook))
 
     candidate = next(row for row in result.rows if row.source_row_number == 3)
-    assert candidate.validation_errors
+    assert candidate.values["full_name"] == "Guest Beta"
+    assert "REQUIRED" in error_codes(candidate)
     assert not any(item["row_number"] == 3 for item in result.ignored_rows)
 
 
@@ -321,6 +282,54 @@ def test_merged_presentation_heading_remains_structural() -> None:
 
     assert [row.source_row_number for row in result.rows] == [4]
     assert {"row_number": 1, "reason": "PRESENTATION"} in result.ignored_rows
+
+
+def test_post_header_merged_unmapped_separator_remains_presentation() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Unmanaged Notes", "Full Name", "Invitation Type"])
+    worksheet.append([None, "Guest Alpha", "Family"])
+    worksheet.merge_cells("A3:C3")
+    worksheet["A3"] = "Synthetic Section Divider"
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [2]
+    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "PRESENTATION"}
+
+
+def test_merged_guest_like_row_between_valid_guests_remains_candidate() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions"])
+    worksheet.append(["Guest Alpha", "Family", 1])
+    worksheet.merge_cells("A3:C3")
+    worksheet["A3"] = "Guest Needs Correction"
+    worksheet.append(["Guest Omega", "Individual", 0])
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4]
+    assert "REQUIRED" in error_codes(result.rows[1])
+
+
+def test_merged_guest_row_with_additional_mapped_evidence_remains_candidate() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type", "Allowed Companions", "Category"])
+    worksheet.append(["Guest Alpha", "Family", 1, "Friends"])
+    worksheet.merge_cells("A3:C3")
+    worksheet["A3"] = "Guest Needs Correction"
+    worksheet["D3"] = "Colleagues"
+
+    result = parse(save_workbook(workbook))
+
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert result.rows[1].values["category"] == "Colleagues"
+    assert "REQUIRED" in error_codes(result.rows[1])
 
 
 @pytest.mark.parametrize(
@@ -589,7 +598,7 @@ def test_summary_like_text_without_aggregate_formula_remains_candidate() -> None
     assert "REQUIRED" in error_codes(result.rows[1])
 
 
-def test_terminal_footer_label_in_mapped_invitation_type_is_structural() -> None:
+def test_terminal_summary_text_in_mapped_invitation_type_remains_candidate() -> None:
     workbook = Workbook()
     worksheet = workbook.active
     assert worksheet is not None
@@ -613,40 +622,93 @@ def test_terminal_footer_label_in_mapped_invitation_type_is_structural() -> None
 
     result = parse(save_workbook(workbook))
 
-    assert [row.source_row_number for row in result.rows] == [5, 6]
+    assert [row.source_row_number for row in result.rows] == [5, 6, 7]
     assert [item["reason"] for item in result.ignored_rows].count("PRESENTATION") == 2
     assert [item["reason"] for item in result.ignored_rows].count("BLANK") == 1
-    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 1
+    assert [item["reason"] for item in result.ignored_rows].count("FOOTER") == 0
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[-1])
 
 
-def test_terminal_unknown_footer_label_in_mapped_invitation_type_is_structural() -> None:
+@pytest.mark.parametrize(
+    "summary_text",
+    ["Uncatalogued constellation reckoning", "Approximate guest totals note"],
+)
+def test_unknown_summary_text_in_mapped_guest_column_remains_candidate(
+    summary_text: str,
+) -> None:
     result = parse(
         simple_workbook(
             [
                 ["Allowed Companions", "Full Name", "Invitation Type"],
                 [1, "Synthetic Guest", "Family"],
-                ["=SUM(A2:A2)", None, "Uncatalogued constellation reckoning"],
+                ["=SUM(A2:A2)", None, summary_text],
             ]
         )
     )
 
-    assert [row.source_row_number for row in result.rows] == [2]
-    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
+    assert [row.source_row_number for row in result.rows] == [2, 3]
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[-1])
 
 
-def test_unknown_footer_wording_does_not_require_fuzzy_matching() -> None:
+def test_non_terminal_malformed_guest_with_formula_remains_candidate() -> None:
     result = parse(
         simple_workbook(
             [
-                ["Allowed Companions", "Full Name", "Invitation Type"],
-                [1, "Synthetic Guest", "Family"],
-                ["=SUM(A2:A2)", None, "Approximate guest totals note"],
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Guest Alpha", "Family", 1],
+                [None, "Unseen Household", "=SUM(C2:C2)"],
+                ["Guest Omega", "Individual", 0],
             ]
         )
     )
 
-    assert [row.source_row_number for row in result.rows] == [2]
-    assert result.ignored_rows[-1] == {"row_number": 3, "reason": "FOOTER"}
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4]
+    assert {"FORMULA_NOT_ALLOWED", "REQUIRED"} <= error_codes(result.rows[1])
+
+
+@pytest.mark.parametrize("table_number", [20, "A-20"])
+def test_malformed_guest_after_blank_precedes_genuine_footer(
+    table_number: int | str,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                [
+                    "Unmanaged Notes",
+                    "Full Name",
+                    "Invitation Type",
+                    "Allowed Companions",
+                    "Table Number",
+                ],
+                [None, "Guest Alpha", "Family", 1, table_number],
+                [None, None, None, None, None],
+                [None, None, "Unseen Household", "=SUM(D2:D2)", None],
+                ["Synthetic aggregate label", None, None, "=SUM(D2:D4)", None],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 4]
+    assert {"FORMULA_NOT_ALLOWED", "REQUIRED"} <= error_codes(result.rows[1])
+    assert {"row_number": 3, "reason": "BLANK"} in result.ignored_rows
+    assert result.ignored_rows[-1] == {"row_number": 5, "reason": "FOOTER"}
+
+
+def test_sparse_rows_with_only_canonical_evidence_remain_candidates() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Table Number", "Category"],
+                ["Guest Alpha", "Family", None, None],
+                [None, "Unseen Household", None, None],
+                [None, None, "T-8", None],
+                [None, None, None, "Colleagues"],
+            ]
+        )
+    )
+
+    assert [row.source_row_number for row in result.rows] == [2, 3, 4, 5]
+    assert all("REQUIRED" in error_codes(row) for row in result.rows[1:])
 
 
 @pytest.mark.parametrize(

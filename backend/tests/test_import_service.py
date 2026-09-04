@@ -829,6 +829,81 @@ def test_excel_error_row_can_be_corrected_then_explicitly_revalidated() -> None:
     assert row.original_validation_errors == [excel_error]
 
 
+def test_recovered_structural_candidate_is_correctable_and_progressable() -> None:
+    imported_values = guest_values(
+        "Synthetic Placeholder",
+        invitation_type="Unseen Household",
+    )
+    imported_values["full_name"] = None
+    imported_values["allowed_companions"] = None
+    formula_error = error(
+        "allowed_companions",
+        "FORMULA_NOT_ALLOWED",
+        "formulas are not allowed in guest rows",
+    )
+    validation_errors = [
+        formula_error,
+        error("full_name", "REQUIRED", "field is required for this event"),
+        error(
+            "allowed_companions",
+            "INVALID_COMPANION_COUNT",
+            "allowed companions must be an integer",
+        ),
+    ]
+    parsed = parsed_workbook(
+        parsed_row(
+            5,
+            imported_values,
+            validation_errors,
+            normalization_errors=[formula_error],
+        )
+    )
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-recovered-row.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=b"synthetic workbook bytes",
+    )
+    row = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)[0]
+    assert row.source_row_number == 5
+    assert row.status == ImportRowStatus.INVALID
+    assert row.original_values == imported_values
+
+    service.correct_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"full_name": "Recovered Guest", "allowed_companions": 1},
+    )
+    assert row.status == ImportRowStatus.PENDING_REVALIDATION
+    assert row.row_version == 2
+
+    service.revalidate_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+    )
+    assert row.status == ImportRowStatus.VALID
+    assert row.row_version == 3
+    assert row.original_values == imported_values
+
+    result = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+    )
+    assert result == {"imported_rows": 1, "invalidated_rows": 0, "duplicate_rows": 0}
+    assert row.status == ImportRowStatus.IMPORTED
+    assert len(guests.items) == 1
+
+
 def test_progress_rejects_overlength_contact_before_guest_persistence() -> None:
     email_limit = getattr(Guest.__table__.columns.email.type, "length", None)
     assert isinstance(email_limit, int)
