@@ -544,6 +544,105 @@ def test_upload_persists_viability_selected_sheet_header_and_rows() -> None:
     assert batch.storage_key in storage.stored
 
 
+def test_safe_alias_and_companion_text_upload_and_progress_canonically() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Flexible Guests"
+    worksheet.append(["Full Name", "Invitation Type", "Phone No.", "Companions", "Table No"])
+    worksheet.append(["Synthetic Flexible", "Family", "+255700000025", "2.00", "02"])
+    content = save_synthetic_workbook(workbook)
+
+    service, events, guests, imports, _, _ = build_service(
+        parsed_workbook(parsed_row(2, guest_values("unused")))
+    )
+    service._parser = WorkbookParser(maximum_candidate_rows=5_000)
+    service._maximum_workbook_bytes = len(content) + 1
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-flexible.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=content,
+    )
+    row = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)[0]
+
+    assert batch.detected_sheet_name == "Flexible Guests"
+    assert batch.header_row_number == 1
+    assert batch.column_mapping_snapshot == {
+        "full_name": 1,
+        "invitation_type": 2,
+        "phone_number": 3,
+        "allowed_companions": 4,
+        "table_number": 5,
+    }
+    assert row.status is ImportRowStatus.VALID
+    assert row.current_values["phone_number"] == "+255700000025"
+    assert row.current_values["allowed_companions"] == 2
+    assert row.current_values["table_number"] == "02"
+
+    progressed = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+    )
+
+    assert progressed == {"imported_rows": 1, "invalidated_rows": 0, "duplicate_rows": 0}
+    assert row.status is ImportRowStatus.IMPORTED
+    assert len(guests.items) == 1
+    assert guests.items[0].phone_number == "+255700000025"
+    assert guests.items[0].allowed_companions == 2
+    assert guests.items[0].table_number == "02"
+
+
+def test_unsupported_companion_text_remains_correctable_and_revalidatable() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type", "Companions"])
+    worksheet.append(["Synthetic Correctable Text", "Family", "two"])
+    content = save_synthetic_workbook(workbook)
+
+    service, events, _, imports, _, _ = build_service(
+        parsed_workbook(parsed_row(2, guest_values("unused")))
+    )
+    service._parser = WorkbookParser(maximum_candidate_rows=5_000)
+    service._maximum_workbook_bytes = len(content) + 1
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-correctable-text.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=content,
+    )
+    row = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)[0]
+    assert row.status is ImportRowStatus.INVALID
+    assert row.validation_errors[0]["code"] == "INVALID_COMPANION_COUNT"
+
+    corrected = service.correct_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"allowed_companions": 1},
+    )
+    assert corrected.status is ImportRowStatus.PENDING_REVALIDATION
+
+    revalidated = service.revalidate_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+    )
+    assert revalidated.status is ImportRowStatus.VALID
+    assert revalidated.current_values["allowed_companions"] == 1
+
+
 def test_ambiguous_upload_leaves_no_batch_rows_or_workbook_evidence() -> None:
     workbook = Workbook()
     first = workbook.active

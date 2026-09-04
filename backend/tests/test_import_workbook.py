@@ -13,11 +13,13 @@ import pytest
 from openpyxl import Workbook
 
 from app.imports.workbook import (
+    HEADER_ALIASES,
     MAX_CANDIDATE_PROBE_ROWS,
     MAX_HEADER_SCAN_ROWS,
     WorkbookParser,
     WorkbookRejectedError,
     _normalize_cell,
+    normalize_header,
 )
 from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION, GuestFieldKey
 from app.models.guest import Guest
@@ -456,7 +458,11 @@ def test_contact_value_must_fit_persistence_contract(
         (12, "12"),
         (12.0, "12"),
         ("12", "12"),
+        ("02", "02"),
+        ("2.0", "2.0"),
         ("A1", "A1"),
+        ("A4", "A4"),
+        ("VIP-2", "VIP-2"),
         ("Table 7", "Table 7"),
     ],
 )
@@ -920,6 +926,235 @@ def test_sparse_or_formula_guest_evidence_is_never_hidden_as_footer() -> None:
     assert "REQUIRED" in error_codes(result.rows[3])
 
 
+def test_normalized_alias_registry_is_collision_free() -> None:
+    owners: dict[str, GuestFieldKey] = {}
+    for field_key in GuestFieldKey:
+        aliases = set(HEADER_ALIASES[field_key]) | {
+            field_key.value,
+            field_key.value.replace("_", " "),
+        }
+        for alias in aliases:
+            normalized = normalize_header(alias)
+            existing = owners.setdefault(normalized, field_key)
+            assert existing is field_key, normalized
+
+
+@pytest.mark.parametrize(
+    "phone_header",
+    ["Phone", "Phone Number", "Phone No", "Phone No.", "PHONE NO", "phone-no", "Mobile"],
+)
+def test_common_phone_headers_map_deterministically(phone_header: str) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", phone_header],
+                ["Synthetic Phone Alias", "Family", "+255700000001"],
+            ]
+        )
+    )
+
+    assert result.column_mapping["phone_number"] == 3
+    assert result.rows[0].values["phone_number"] == "+255700000001"
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.parametrize(
+    ("header", "field_key"),
+    [
+        ("Full Name", GuestFieldKey.FULL_NAME),
+        ("Guest Name", GuestFieldKey.FULL_NAME),
+        ("Invitation Type", GuestFieldKey.INVITATION_TYPE),
+        ("Allowed Companions", GuestFieldKey.ALLOWED_COMPANIONS),
+        ("Table No", GuestFieldKey.TABLE_NUMBER),
+        ("Table Number", GuestFieldKey.TABLE_NUMBER),
+        ("Category", GuestFieldKey.CATEGORY),
+        ("Group", GuestFieldKey.CATEGORY),
+    ],
+)
+def test_established_common_headers_keep_their_canonical_meaning(
+    header: str,
+    field_key: GuestFieldKey,
+) -> None:
+    headers = ["Full Name", "Invitation Type"]
+    values: list[object] = ["Synthetic Existing Alias", "Family"]
+    if field_key is GuestFieldKey.FULL_NAME:
+        headers[0] = header
+    elif field_key is GuestFieldKey.INVITATION_TYPE:
+        headers[1] = header
+    else:
+        headers.append(header)
+        values.append(0 if field_key is GuestFieldKey.ALLOWED_COMPANIONS else "Synthetic Value")
+
+    result = parse(simple_workbook([headers, values]))
+
+    assert field_key.value in result.column_mapping
+
+
+def test_generic_type_header_remains_intentionally_unsupported() -> None:
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(simple_workbook([["Full Name", "Type"], ["Synthetic Type", "Family"]]))
+
+    assert exc_info.value.code == "MISSING_REQUIRED_COLUMNS"
+    assert "invitation_type" in str(exc_info.value)
+
+
+def test_phone_alias_collision_in_one_header_remains_fail_closed() -> None:
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(
+            simple_workbook(
+                [
+                    ["Full Name", "Invitation Type", "Phone", "Phone No"],
+                    ["Synthetic Duplicate Header", "Family", "+255700000001", None],
+                ]
+            )
+        )
+
+    assert exc_info.value.code == "NO_GUEST_TABLE"
+
+
+@pytest.mark.parametrize(
+    ("companions", "expected"),
+    [
+        (None, 0),
+        ("", 0),
+        ("   ", 0),
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (2.0, 2),
+        ("0", 0),
+        ("1", 1),
+        ("2", 2),
+        (" 0 ", 0),
+        (" 1 ", 1),
+        (" 2 ", 2),
+        ("0.0", 0),
+        ("1.0", 1),
+        ("2.0", 2),
+        ("1.00", 1),
+        ("2.00", 2),
+    ],
+)
+def test_safe_companion_representations_normalize_to_integer(
+    companions: object,
+    expected: int,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Companion", "Family", companions],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] == expected
+    assert result.rows[0].normalization_errors == []
+    assert result.rows[0].validation_errors == []
+
+
+@pytest.mark.parametrize(
+    "companions",
+    [
+        1.5,
+        "2.5",
+        "-1",
+        "+1",
+        "1e0",
+        "2e0",
+        "one",
+        "two",
+        "1,0",
+        "2,0",
+        "1 companion",
+        "2 guests",
+        "9" * 5_000,
+    ],
+)
+def test_ambiguous_companion_representations_remain_invalid(companions: object) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Invalid Companion", "Family", companions],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] is None
+    assert "INVALID_COMPANION_COUNT" in error_codes(result.rows[0])
+
+
+@pytest.mark.parametrize("companions", [True, False])
+def test_boolean_companion_cells_never_coerce_to_integer(companions: bool) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Boolean Companion", "Family", companions],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] is None
+    assert "UNSUPPORTED_VALUE_TYPE" in error_codes(result.rows[0])
+
+
+def test_companion_formula_remains_inert_and_invalid() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Formula Companion", "Family", "=1+1"],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] is None
+    assert "FORMULA_NOT_ALLOWED" in error_codes(result.rows[0])
+
+
+def test_textual_companion_count_still_obeys_event_maximum() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Allowed Companions"],
+                ["Synthetic Over Limit", "Family", "3"],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["allowed_companions"] == 3
+    assert error_codes(result.rows[0]) == {"COMPANION_LIMIT_EXCEEDED"}
+
+
+@pytest.mark.parametrize(
+    ("table_value", "companion_value", "expected_table", "expected_companions"),
+    [
+        ("2", "2", "2", 2),
+        ("2.0", "2.0", "2.0", 2),
+    ],
+)
+def test_table_and_companion_text_never_cross_field_semantics(
+    table_value: str,
+    companion_value: str,
+    expected_table: str,
+    expected_companions: int,
+) -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type", "Table No", "Companions"],
+                ["Synthetic Semantic Boundary", "Family", table_value, companion_value],
+            ]
+        )
+    )
+
+    assert result.rows[0].values["table_number"] == expected_table
+    assert result.rows[0].values["allowed_companions"] == expected_companions
+    assert result.rows[0].validation_errors == []
+
+
 @pytest.mark.parametrize("companions", [0, 1, 2])
 def test_companion_values_within_system_and_event_ceiling_are_valid(companions: int) -> None:
     result = parse(
@@ -1042,14 +1277,18 @@ def test_plausible_lower_mapping_score_beats_empty_higher_score_sheet() -> None:
     empty.merge_cells("A2:G2")
     empty["A2"] = "Synthetic presentation content"
     guests = workbook.create_sheet("Real Guests")
-    guests.append(["Invitation Type", "Full Name"])
-    guests.append(["Family", "Synthetic Plausible"])
+    guests.append(["Invitation Type", "Full Name", "Phone No."])
+    guests.append(["Family", "Synthetic Plausible", "+255700000002"])
 
     result = parse(save_workbook(workbook))
 
     assert result.sheet_name == "Real Guests"
     assert result.header_row_number == 1
-    assert result.column_mapping == {"invitation_type": 1, "full_name": 2}
+    assert result.column_mapping == {
+        "invitation_type": 1,
+        "full_name": 2,
+        "phone_number": 3,
+    }
 
 
 def test_hidden_high_score_sheet_never_competes_with_visible_plausible_sheet() -> None:

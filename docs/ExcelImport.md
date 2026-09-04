@@ -28,6 +28,12 @@ Default maximum companions per invitation: **2**.
 
 Spreadsheet values do not redefine this policy.
 
+After a header maps a column to `allowed_companions`, non-negative decimal text
+with an optional all-zero fractional part is normalized exactly to an integer.
+Surrounding whitespace is ignored. Signs, scientific notation, locale separators,
+fractional values, prose, booleans, and formulas remain invalid; the normalized
+integer is still checked against the event maximum.
+
 ## Workflow
 
 ```text
@@ -62,6 +68,12 @@ rows and actual mapped-field occupancy count even when field validation will fai
 Blank, presentation, footer, and established repeated-header rows do not create
 guest viability. Independent plausible tables that cannot be selected safely fail
 closed with `AMBIGUOUS_GUEST_TABLE`; hidden sheets never affect that decision.
+
+Header aliases remain a small explicit registry. `Phone No` is accepted for
+`phone_number` (including punctuation and case variants handled by normal header
+normalization). Generic `Type` remains unsupported because it can refer to
+invitation type, category, or organizer-defined data without deterministic
+header evidence.
 
 ## Structural behavior
 

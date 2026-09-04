@@ -49,6 +49,7 @@ _FORBIDDEN_PREFIXES = (
 _FORBIDDEN_PARTS = {"xl/vbaProject.bin"}
 _HEADER_PUNCTUATION = re.compile(r"[^a-z0-9]+")
 _PHONE_LIKE = re.compile(r"^\+?[0-9 ()\-.]+$")
+_COMPANION_INTEGER_TEXT = re.compile(r"^(?P<integer>[0-9]+)(?:\.0+)?$")
 _AGGREGATE_FORMULA = re.compile(
     r"^\s*=\s*(SUM|COUNT|COUNTA)\s*\(\s*\$?([A-Z]+)\$?(\d+)\s*:\s*"
     r"\$?([A-Z]+)\$?(\d+)\s*\)\s*$",
@@ -59,7 +60,15 @@ _COUNTABLE_FIELDS = frozenset(GuestFieldKey)
 HEADER_ALIASES: dict[GuestFieldKey, frozenset[str]] = {
     GuestFieldKey.FULL_NAME: frozenset({"full name", "guest", "guest name", "name"}),
     GuestFieldKey.PHONE_NUMBER: frozenset(
-        {"contact number", "mobile", "mobile number", "phone", "phone number", "telephone"}
+        {
+            "contact number",
+            "mobile",
+            "mobile number",
+            "phone",
+            "phone no",
+            "phone number",
+            "telephone",
+        }
     ),
     GuestFieldKey.EMAIL: frozenset({"email", "email address", "e mail"}),
     GuestFieldKey.INVITATION_TYPE: frozenset(
@@ -833,6 +842,16 @@ def _normalize_cell(
             return value, None
         if isinstance(value, float) and math.isfinite(value) and value.is_integer():
             return int(value), None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return 0, None
+            match = _COMPANION_INTEGER_TEXT.fullmatch(normalized)
+            if match is not None:
+                try:
+                    return int(match.group("integer")), None
+                except ValueError:
+                    pass
         return None, error(
             field_key,
             "INVALID_COMPANION_COUNT",

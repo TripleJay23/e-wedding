@@ -63,11 +63,13 @@ def synthetic_workbook() -> bytes:
             "Allowed Companions",
             "Invitation Type",
             "Email",
-            "Phone",
+            "Phone No.",
             "Table Number",
         ]
     )
-    worksheet.append([None, "Synthetic Valid One", 2, "Family", "one@example.test", None, 1])
+    worksheet.append(
+        [None, "Synthetic Valid One", "2.00", "Family", "one@example.test", None, "02"]
+    )
     worksheet.append([None, "Synthetic Correctable", 0, None, "correct@example.test", None, 2.0])
     worksheet.append([None, "Synthetic Valid Two", 0, "Individual", None, "+255700000022", "A1"])
     worksheet.append([None, "Synthetic Duplicate", 1, "Family", "ONE@example.test", None, 12])
@@ -333,6 +335,8 @@ async def exercise_import_api(
         upload_body = upload.json()
         batch_id = upload_body["id"]
         reconciliation = upload_body["reconciliation"]
+        assert upload_body["detected_sheet_name"] == "Synthetic Guest List"
+        assert upload_body["header_row_number"] == 3
         assert reconciliation == {
             "actual_guest_rows_discovered": 4,
             "ignored_non_data_rows": 3,
@@ -357,10 +361,16 @@ async def exercise_import_api(
         staged_items = staged_rows.json()["items"]
         assert [item["source_row_number"] for item in staged_items] == [4, 5, 6, 7]
         assert [item["current_values"]["table_number"] for item in staged_items] == [
-            "1",
+            "02",
             "2",
             "A1",
             "12",
+        ]
+        assert [item["current_values"]["allowed_companions"] for item in staged_items] == [
+            2,
+            0,
+            0,
+            1,
         ]
         assert all(item["original_values"] == item["current_values"] for item in staged_items)
 
@@ -531,7 +541,13 @@ async def exercise_import_api(
             headers=headers,
         )
         assert guests.status_code == 200
-        assert len(guests.json()["items"]) == 3
+        guest_items = guests.json()["items"]
+        assert len(guest_items) == 3
+        first_guest = next(
+            item for item in guest_items if item["full_name"] == "Synthetic Valid One"
+        )
+        assert first_guest["allowed_companions"] == 2
+        assert first_guest["table_number"] == "02"
 
         reupload = await client.post(
             f"/api/v1/events/{event_id}/imports",
