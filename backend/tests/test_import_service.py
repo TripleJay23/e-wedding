@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
+from io import BytesIO
 from uuid import UUID, uuid4
 
 import pytest
+from openpyxl import Workbook
 from sqlalchemy.exc import IntegrityError
 
-from app.imports.workbook import ParsedGuestRow, ParsedWorkbook, WorkbookRejectedError
+from app.imports.workbook import (
+    ParsedGuestRow,
+    ParsedWorkbook,
+    WorkbookParser,
+    WorkbookRejectedError,
+)
 from app.models.event import (
     DEFAULT_GUEST_FIELD_CONFIGURATION,
     Event,
@@ -109,6 +116,13 @@ def parsed_workbook(*rows: ParsedGuestRow) -> ParsedWorkbook:
         ),
         rows=rows,
     )
+
+
+def save_synthetic_workbook(workbook: Workbook) -> bytes:
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
 
 
 class FakeEventRepository:
@@ -485,6 +499,83 @@ def test_upload_stages_valid_invalid_duplicates_and_private_evidence() -> None:
         "guests_created_from_batch": 0,
         "overall_batch_state": "VALIDATED",
     }
+
+
+def test_upload_persists_viability_selected_sheet_header_and_rows() -> None:
+    workbook = Workbook()
+    cover = workbook.active
+    assert cover is not None
+    cover.title = "Cover"
+    cover.append(["Synthetic presentation only"])
+    guests_sheet = workbook.create_sheet("Guest Register")
+    guests_sheet.merge_cells("A1:C1")
+    guests_sheet["A1"] = "Synthetic Guest Register"
+    guests_sheet.append([])
+    guests_sheet.append(["Invitation Type", "Full Name", "Table Number"])
+    guests_sheet.append(["Family", "Synthetic Selected", "A-12"])
+    content = save_synthetic_workbook(workbook)
+
+    service, events, _, imports, _, storage = build_service(
+        parsed_workbook(parsed_row(2, guest_values("unused")))
+    )
+    service._parser = WorkbookParser(maximum_candidate_rows=5_000)
+    service._maximum_workbook_bytes = len(content) + 1
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-selection.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=content,
+    )
+
+    rows = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)
+    assert batch.detected_sheet_name == "Guest Register"
+    assert batch.header_row_number == 3
+    assert batch.column_mapping_snapshot == {
+        "invitation_type": 1,
+        "full_name": 2,
+        "table_number": 3,
+    }
+    assert [(row.source_row_number, row.current_values["full_name"]) for row in rows] == [
+        (4, "Synthetic Selected")
+    ]
+    assert batch.storage_key in storage.stored
+
+
+def test_ambiguous_upload_leaves_no_batch_rows_or_workbook_evidence() -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.append(["Full Name", "Invitation Type"])
+    first.append(["Synthetic First", "Family"])
+    second = workbook.create_sheet("Second")
+    second.append(["Full Name", "Invitation Type"])
+    second.append(["Synthetic Second", "Family"])
+    content = save_synthetic_workbook(workbook)
+
+    service, events, _, imports, _, storage = build_service(
+        parsed_workbook(parsed_row(2, guest_values("unused")))
+    )
+    service._parser = WorkbookParser(maximum_candidate_rows=5_000)
+    service._maximum_workbook_bytes = len(content) + 1
+    assert events.event is not None
+
+    with pytest.raises(ImportUploadRejectedError) as exc_info:
+        service.upload_workbook(
+            events.event.id,
+            administrator_id=events.event.created_by,
+            filename="synthetic-ambiguous.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            content=content,
+        )
+
+    assert exc_info.value.code == "AMBIGUOUS_GUEST_TABLE"
+    assert imports.batches == {}
+    assert imports.rows == {}
+    assert imports.commits == 0
+    assert storage.stored == {}
 
 
 def test_unconfirmed_historical_preview_does_not_reserve_retry_identity() -> None:

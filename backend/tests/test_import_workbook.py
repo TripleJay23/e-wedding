@@ -12,7 +12,13 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 from openpyxl import Workbook
 
-from app.imports.workbook import WorkbookParser, WorkbookRejectedError, _normalize_cell
+from app.imports.workbook import (
+    MAX_CANDIDATE_PROBE_ROWS,
+    MAX_HEADER_SCAN_ROWS,
+    WorkbookParser,
+    WorkbookRejectedError,
+    _normalize_cell,
+)
 from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION, GuestFieldKey
 from app.models.guest import Guest
 from app.services.guest_validation import GuestFieldPolicy
@@ -997,6 +1003,105 @@ def test_missing_required_configured_column_fails_closed() -> None:
     assert "invitation_type" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("first_value", [None, "Synthetic event instructions"])
+def test_empty_or_irrelevant_first_sheet_does_not_receive_preference(
+    first_value: str | None,
+) -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.title = "Cover"
+    if first_value is not None:
+        first.append([first_value])
+    second = workbook.create_sheet("Guests")
+    second.append(["Full Name", "Invitation Type"])
+    second.append(["Synthetic Selected", "Family"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Guests"
+    assert [row.values["full_name"] for row in result.rows] == ["Synthetic Selected"]
+
+
+def test_plausible_lower_mapping_score_beats_empty_higher_score_sheet() -> None:
+    workbook = Workbook()
+    empty = workbook.active
+    assert empty is not None
+    empty.title = "Canonical Cover"
+    empty.append(
+        [
+            "Full Name",
+            "Invitation Type",
+            "Phone",
+            "Email",
+            "Allowed Companions",
+            "Table Number",
+            "Category",
+        ]
+    )
+    empty.merge_cells("A2:G2")
+    empty["A2"] = "Synthetic presentation content"
+    guests = workbook.create_sheet("Real Guests")
+    guests.append(["Invitation Type", "Full Name"])
+    guests.append(["Family", "Synthetic Plausible"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Real Guests"
+    assert result.header_row_number == 1
+    assert result.column_mapping == {"invitation_type": 1, "full_name": 2}
+
+
+def test_hidden_high_score_sheet_never_competes_with_visible_plausible_sheet() -> None:
+    workbook = Workbook()
+    visible = workbook.active
+    assert visible is not None
+    visible.title = "Visible Guests"
+    visible.append(["Full Name", "Invitation Type"])
+    visible.append(["Synthetic Visible", "Family"])
+    hidden = workbook.create_sheet("Hidden Canonical")
+    hidden.sheet_state = "hidden"
+    hidden.append(
+        [
+            "Full Name",
+            "Invitation Type",
+            "Phone",
+            "Email",
+            "Allowed Companions",
+            "Table Number",
+            "Category",
+        ]
+    )
+    hidden.append(["Synthetic Hidden", "Family", None, None, 0, "H-1", "Synthetic"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Visible Guests"
+    assert [row.values["full_name"] for row in result.rows] == ["Synthetic Visible"]
+
+
+def test_two_plausible_sheets_use_bounded_data_evidence_for_clear_winner() -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.title = "Short List"
+    first.append(["Full Name", "Invitation Type", "Email"])
+    first.append(["Synthetic One", "Family", None])
+    second = workbook.create_sheet("Guest Register")
+    second.append(["Full Name", "Invitation Type"])
+    second.append(["Synthetic Two", "Family"])
+    second.append(["Synthetic Three", None])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Guest Register"
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic Two",
+        "Synthetic Three",
+    ]
+    assert "REQUIRED" in error_codes(result.rows[1])
+
+
 def test_equal_guest_tables_on_two_visible_sheets_are_ambiguous() -> None:
     workbook = Workbook()
     first = workbook.active
@@ -1025,6 +1130,169 @@ def test_hidden_equal_sheet_does_not_make_visible_selection_ambiguous() -> None:
 
     result = parse(save_workbook(workbook))
     assert [row.values["full_name"] for row in result.rows] == ["Synthetic One"]
+
+
+def test_later_real_header_beats_same_sheet_empty_header_candidate() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type"],
+                [],
+                ["Full Name", "Invitation Type"],
+                ["Synthetic Selected", "Family"],
+            ]
+        )
+    )
+
+    assert result.header_row_number == 3
+    assert [row.source_row_number for row in result.rows] == [4]
+
+
+def test_two_independent_plausible_tables_on_one_sheet_are_ambiguous() -> None:
+    with pytest.raises(WorkbookRejectedError) as exc_info:
+        parse(
+            simple_workbook(
+                [
+                    ["Full Name", "Invitation Type"],
+                    ["Synthetic First", "Family"],
+                    [],
+                    ["Full Name", "Invitation Type", "Email"],
+                    ["Synthetic Second", "Family", "second@example.test"],
+                ]
+            )
+        )
+
+    assert exc_info.value.code == "AMBIGUOUS_GUEST_TABLE"
+    assert "Synthetic" not in str(exc_info.value)
+
+
+def test_repeated_header_inside_one_data_region_is_not_a_competing_table() -> None:
+    result = parse(
+        simple_workbook(
+            [
+                ["Full Name", "Invitation Type"],
+                ["Synthetic First", "Family"],
+                ["Full Name", "Invitation Type"],
+                ["Synthetic Second", "Individual"],
+            ]
+        )
+    )
+
+    assert result.header_row_number == 1
+    assert [row.values["full_name"] for row in result.rows] == [
+        "Synthetic First",
+        "Synthetic Second",
+    ]
+    assert {item["reason"] for item in result.ignored_rows} == {"REPEATED_HEADER"}
+
+
+def test_invalid_rows_with_mapped_occupancy_contribute_to_table_viability() -> None:
+    workbook = Workbook()
+    empty = workbook.active
+    assert empty is not None
+    empty.append(["Full Name", "Invitation Type", "Phone", "Email"])
+    malformed = workbook.create_sheet("Malformed Guests")
+    malformed.append(["Full Name", "Invitation Type"])
+    malformed.append(["Synthetic Invalid", None])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Malformed Guests"
+    assert error_codes(result.rows[0]) == {"REQUIRED"}
+
+
+def test_duplicate_canonical_header_does_not_gain_candidate_viability() -> None:
+    workbook = Workbook()
+    malformed = workbook.active
+    assert malformed is not None
+    malformed.append(["Full Name", "Name", "Invitation Type", "Email"])
+    malformed.append(["Synthetic Wrong", "Synthetic Duplicate", "Family", "x@example.test"])
+    valid = workbook.create_sheet("Valid")
+    valid.append(["Full Name", "Invitation Type"])
+    valid.append(["Synthetic Selected", "Family"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Valid"
+
+
+def test_populated_optional_columns_cannot_replace_required_header_coverage() -> None:
+    workbook = Workbook()
+    optional_only = workbook.active
+    assert optional_only is not None
+    optional_only.append(["Phone", "Email", "Allowed Companions", "Table Number", "Category"])
+    for index in range(5):
+        optional_only.append(
+            [f"+2557000000{index}", f"guest{index}@example.test", 1, index, "Synthetic"]
+        )
+    valid = workbook.create_sheet("Required Fields")
+    valid.append(["Full Name", "Invitation Type"])
+    valid.append(["Synthetic Selected", "Family"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Required Fields"
+
+
+def test_unknown_columns_do_not_increase_canonical_selection_score() -> None:
+    workbook = Workbook()
+    first = workbook.active
+    assert first is not None
+    first.append(["Full Name", "Invitation Type", "Unmanaged One", "Unmanaged Two"])
+    first.append(["Synthetic First", "Family", "x", "y"])
+    second = workbook.create_sheet("Canonical Winner")
+    second.append(["Full Name", "Invitation Type", "Email"])
+    second.append(["Synthetic Second", "Family", "second@example.test"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Canonical Winner"
+
+
+@pytest.mark.parametrize(
+    ("header_row", "expected_header", "expected_code"),
+    [
+        (MAX_HEADER_SCAN_ROWS, MAX_HEADER_SCAN_ROWS, None),
+        (MAX_HEADER_SCAN_ROWS + 1, None, "MISSING_REQUIRED_COLUMNS"),
+    ],
+)
+def test_header_scan_boundary_remains_explicit_and_bounded(
+    header_row: int,
+    expected_header: int | None,
+    expected_code: str | None,
+) -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.cell(row=header_row, column=1, value="Full Name")
+    worksheet.cell(row=header_row, column=2, value="Invitation Type")
+    worksheet.cell(row=header_row + 1, column=1, value="Synthetic Boundary")
+    worksheet.cell(row=header_row + 1, column=2, value="Family")
+    content = save_workbook(workbook)
+
+    if expected_code is not None:
+        with pytest.raises(WorkbookRejectedError) as exc_info:
+            parse(content)
+        assert exc_info.value.code == expected_code
+    else:
+        result = parse(content)
+        assert result.header_row_number == expected_header
+
+
+def test_candidate_probe_is_bounded_on_sparse_sheet() -> None:
+    workbook = Workbook()
+    sparse = workbook.active
+    assert sparse is not None
+    sparse.append(["Full Name", "Invitation Type", "Email"])
+    sparse.cell(row=MAX_CANDIDATE_PROBE_ROWS + 2, column=1, value="Synthetic Late")
+    sparse.cell(row=MAX_CANDIDATE_PROBE_ROWS + 2, column=2, value="Family")
+    plausible = workbook.create_sheet("Bounded Winner")
+    plausible.append(["Full Name", "Invitation Type"])
+    plausible.append(["Synthetic In Probe", "Family"])
+
+    result = parse(save_workbook(workbook))
+
+    assert result.sheet_name == "Bounded Winner"
 
 
 @pytest.mark.parametrize(

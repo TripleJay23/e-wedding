@@ -33,6 +33,7 @@ MAX_COMPRESSION_RATIO = 250
 MAX_WORKSHEET_ROWS = 10_000
 MAX_WORKSHEET_COLUMNS = 100
 MAX_HEADER_SCAN_ROWS = 100
+MAX_CANDIDATE_PROBE_ROWS = 100
 
 _REQUIRED_XLSX_PARTS = {
     "[Content_Types].xml",
@@ -119,6 +120,32 @@ class _HeaderCandidate:
         return len(self.mapping)
 
 
+@dataclass(frozen=True, slots=True)
+class _CandidateAssessment:
+    """Privacy-free bounded evidence for one header and its following region."""
+
+    candidate: _HeaderCandidate
+    probe_start_row: int
+    probe_end_row: int
+    candidate_row_count: int
+    plausible_candidate_count: int
+    structural_row_count: int
+    mapped_occupancy_count: int
+
+    @property
+    def has_meaningful_guest_data(self) -> bool:
+        return self.plausible_candidate_count > 0
+
+    @property
+    def selection_score(self) -> tuple[int, int, int, int]:
+        return (
+            int(self.has_meaningful_guest_data),
+            self.plausible_candidate_count,
+            self.mapped_occupancy_count,
+            self.candidate.score,
+        )
+
+
 @dataclass(slots=True)
 class _GuestTableContext:
     """Bounded semantic context accumulated from preceding candidate rows."""
@@ -195,7 +222,11 @@ class WorkbookParser:
                         "WORKSHEET_LIMIT_EXCEEDED", "worksheet dimensions exceed import limits"
                     )
 
-            candidate = self._detect_header(visible_sheets, policies)
+            candidate = self._detect_header(
+                visible_sheets,
+                policies,
+                event_companion_maximum,
+            )
             return self._parse_sheet(candidate, policies, event_companion_maximum)
         finally:
             workbook.close()
@@ -204,11 +235,12 @@ class WorkbookParser:
         self,
         worksheets: list[Worksheet],
         policies: list[GuestFieldPolicy],
+        event_companion_maximum: int,
     ) -> _HeaderCandidate:
         required = {policy.field_key for policy in policies if policy.enabled and policy.required}
         enabled = {policy.field_key for policy in policies if policy.enabled}
         aliases = _enabled_alias_lookup(enabled)
-        per_sheet: list[_HeaderCandidate] = []
+        per_sheet: list[_CandidateAssessment] = []
         best_partial: set[GuestFieldKey] = set()
 
         for worksheet in worksheets:
@@ -221,12 +253,38 @@ class WorkbookParser:
                     continue
                 sheet_candidates.append(_HeaderCandidate(worksheet, row_number, mapping))
             if sheet_candidates:
-                best_score = max(item.score for item in sheet_candidates)
-                earliest = min(
-                    (item for item in sheet_candidates if item.score == best_score),
-                    key=lambda item: item.row_number,
-                )
-                per_sheet.append(earliest)
+                last_populated_row = _last_populated_row(worksheet, 1)
+                assessments = [
+                    _assess_header_candidate(
+                        item,
+                        policies,
+                        event_companion_maximum,
+                        stop_before_row=(
+                            sheet_candidates[index + 1].row_number
+                            if index + 1 < len(sheet_candidates)
+                            else None
+                        ),
+                        last_populated_row=last_populated_row,
+                    )
+                    for index, item in enumerate(sheet_candidates)
+                ]
+                assessments = _collapse_repeated_header_assessments(assessments)
+                meaningful = [item for item in assessments if item.has_meaningful_guest_data]
+                if len(meaningful) > 1:
+                    raise WorkbookRejectedError(
+                        "AMBIGUOUS_GUEST_TABLE",
+                        "multiple plausible guest tables were detected on one visible worksheet",
+                    )
+                contenders = meaningful or assessments
+                best_score = max(item.selection_score for item in contenders)
+                finalists = [item for item in contenders if item.selection_score == best_score]
+                if len(finalists) != 1:
+                    raise WorkbookRejectedError(
+                        "AMBIGUOUS_GUEST_TABLE",
+                        "multiple equal guest table candidates were detected "
+                        "on one visible worksheet",
+                    )
+                per_sheet.append(finalists[0])
 
         if not per_sheet:
             missing = sorted(field.value for field in required - best_partial)
@@ -239,13 +297,13 @@ class WorkbookParser:
                 "NO_GUEST_TABLE", "no unambiguous configured guest table was detected"
             )
 
-        best_score = max(item.score for item in per_sheet)
-        finalists = [item for item in per_sheet if item.score == best_score]
+        best_score = max(item.selection_score for item in per_sheet)
+        finalists = [item for item in per_sheet if item.selection_score == best_score]
         if len(finalists) != 1:
             raise WorkbookRejectedError(
                 "AMBIGUOUS_GUEST_TABLE", "multiple visible worksheets contain equal guest tables"
             )
-        return finalists[0]
+        return finalists[0].candidate
 
     def _parse_sheet(
         self,
@@ -321,6 +379,102 @@ class WorkbookParser:
             ignored_rows=tuple(ignored),
             rows=tuple(parsed_rows),
         )
+
+
+def _assess_header_candidate(
+    candidate: _HeaderCandidate,
+    policies: list[GuestFieldPolicy],
+    event_companion_maximum: int,
+    *,
+    stop_before_row: int | None,
+    last_populated_row: int | None,
+) -> _CandidateAssessment:
+    """Probe one bounded region without using row validity as selection evidence."""
+    worksheet = candidate.worksheet
+    probe_start = candidate.row_number + 1
+    probe_end = min(worksheet.max_row, candidate.row_number + MAX_CANDIDATE_PROBE_ROWS)
+    if stop_before_row is not None:
+        probe_end = min(probe_end, stop_before_row - 1)
+
+    candidate_rows = 0
+    plausible_rows = 0
+    structural_rows = 0
+    mapped_occupancy = 0
+    aliases = _enabled_alias_lookup(set(candidate.mapping))
+    merged_ranges = tuple(worksheet.merged_cells.ranges)
+    context = _GuestTableContext(candidate.row_number, [], set())
+
+    for row_number in range(probe_start, probe_end + 1):
+        cells = worksheet[row_number]
+        reason = _ignored_row_reason(
+            cells,
+            row_number=row_number,
+            selected_mapping=candidate.mapping,
+            aliases=aliases,
+            merged_ranges=merged_ranges,
+            is_terminal=row_number == last_populated_row,
+            context=context,
+        )
+        if reason is not None:
+            structural_rows += 1
+            continue
+
+        candidate_rows += 1
+        occupied = sum(
+            1
+            for column in candidate.mapping.values()
+            if cells[column - 1].value is not None and cells[column - 1].value != ""
+        )
+        if occupied:
+            plausible_rows += 1
+            mapped_occupancy += occupied
+
+        values, _ = _normalize_candidate(cells, candidate.mapping, policies)
+        context.observe(row_number, values, policies, event_companion_maximum)
+
+    return _CandidateAssessment(
+        candidate=candidate,
+        probe_start_row=probe_start,
+        probe_end_row=max(candidate.row_number, probe_end),
+        candidate_row_count=candidate_rows,
+        plausible_candidate_count=plausible_rows,
+        structural_row_count=structural_rows,
+        mapped_occupancy_count=mapped_occupancy,
+    )
+
+
+def _collapse_repeated_header_assessments(
+    assessments: list[_CandidateAssessment],
+) -> list[_CandidateAssessment]:
+    """Fold an identical later header into an established guest-data region."""
+    collapsed: list[_CandidateAssessment] = []
+    for assessment in assessments:
+        if (
+            collapsed
+            and collapsed[-1].has_meaningful_guest_data
+            and assessment.candidate.mapping == collapsed[-1].candidate.mapping
+        ):
+            preceding = collapsed[-1]
+            collapsed[-1] = _CandidateAssessment(
+                candidate=preceding.candidate,
+                probe_start_row=preceding.probe_start_row,
+                probe_end_row=assessment.probe_end_row,
+                candidate_row_count=(
+                    preceding.candidate_row_count + assessment.candidate_row_count
+                ),
+                plausible_candidate_count=(
+                    preceding.plausible_candidate_count + assessment.plausible_candidate_count
+                ),
+                structural_row_count=(
+                    preceding.structural_row_count + assessment.structural_row_count + 1
+                ),
+                mapped_occupancy_count=(
+                    preceding.mapped_occupancy_count + assessment.mapped_occupancy_count
+                ),
+            )
+            continue
+        collapsed.append(assessment)
+    return collapsed
 
 
 def _inspect_xlsx_package(workbook_bytes: bytes) -> None:

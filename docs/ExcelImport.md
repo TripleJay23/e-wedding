@@ -49,6 +49,20 @@ Upload workbook
 → reconcile all persisted guests
 ```
 
+## Sheet and header selection
+
+Only visible worksheets compete. Header discovery examines at most the first 100
+rows of each visible worksheet. Every eligible header must map all configured
+required fields, map at least two canonical fields, and contain no duplicate
+canonical mapping.
+
+Selection then probes at most 100 rows after each eligible header. It ranks
+affirmative guest-table evidence before mapped-header count: plausible candidate
+rows and actual mapped-field occupancy count even when field validation will fail.
+Blank, presentation, footer, and established repeated-header rows do not create
+guest viability. Independent plausible tables that cannot be selected safely fail
+closed with `AMBIGUOUS_GUEST_TABLE`; hidden sheets never affect that decision.
+
 ## Structural behavior
 
 Must handle:
