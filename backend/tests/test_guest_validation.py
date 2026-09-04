@@ -1,6 +1,9 @@
 """Shared manual/import guest validation and duplicate identity tests."""
 
+import pytest
+
 from app.models.event import DEFAULT_GUEST_FIELD_CONFIGURATION, GuestFieldKey
+from app.models.guest import Guest
 from app.services.guest_validation import (
     GuestFieldPolicy,
     guest_identity_fingerprints,
@@ -29,6 +32,43 @@ def values() -> dict[str, object]:
 
 def test_shared_validator_accepts_one_canonical_valid_guest() -> None:
     assert validate_guest_values(values(), policies(), 2) == []
+
+
+def contact_value_at_length(field_key: GuestFieldKey, length: int) -> str:
+    if field_key is GuestFieldKey.PHONE_NUMBER:
+        fixed_digits = "+1234567"
+        return "+123" + (" " * (length - len(fixed_digits))) + "4567"
+    suffix = "@example.test"
+    return ("a" * (length - len(suffix))) + suffix
+
+
+@pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
+@pytest.mark.parametrize("extra_characters", [0, 1, 100])
+def test_shared_contact_validation_matches_guest_persistence_length(
+    field_key: GuestFieldKey,
+    extra_characters: int,
+) -> None:
+    limit = getattr(Guest.__table__.columns[field_key.value].type, "length", None)
+    assert isinstance(limit, int)
+    candidate = values()
+    candidate[field_key.value] = contact_value_at_length(field_key, limit + extra_characters)
+
+    errors = validate_guest_values(candidate, policies(), 2)
+
+    field_errors = [item for item in errors if item["field"] == field_key.value]
+    if extra_characters == 0:
+        assert field_errors == []
+    else:
+        expected_code = (
+            "INVALID_PHONE" if field_key is GuestFieldKey.PHONE_NUMBER else "INVALID_EMAIL"
+        )
+        assert field_errors == [
+            {
+                "field": field_key.value,
+                "code": expected_code,
+                "message": f"{field_key.value.replace('_number', '')} is invalid",
+            }
+        ]
 
 
 def test_shared_validator_returns_multiple_bounded_field_errors() -> None:

@@ -774,6 +774,94 @@ def test_correction_is_optimistic_preserves_origin_and_requires_explicit_revalid
         )
 
 
+def test_excel_error_row_can_be_corrected_then_explicitly_revalidated() -> None:
+    imported_values = guest_values("Synthetic Excel Error", email=None)
+    excel_error = error(
+        "email",
+        "EXCEL_ERROR_VALUE_NOT_ALLOWED",
+        "Excel error cells are not allowed in guest fields",
+    )
+    parsed = parsed_workbook(
+        parsed_row(
+            2,
+            imported_values,
+            [excel_error],
+            normalization_errors=[excel_error],
+        )
+    )
+    service, events, _, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-error.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=b"synthetic workbook bytes",
+    )
+    row = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)[0]
+    assert row.status == ImportRowStatus.INVALID
+    assert row.original_values == imported_values
+    assert row.original_validation_errors == [excel_error]
+
+    service.correct_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+        expected_version=1,
+        values={"email": " FIXED@EXAMPLE.TEST "},
+    )
+    assert row.status == ImportRowStatus.PENDING_REVALIDATION
+    assert row.row_version == 2
+    assert row.validation_errors == []
+    assert row.original_values == imported_values
+
+    service.revalidate_row(
+        events.event.id,
+        batch.id,
+        row.id,
+        administrator_id=events.event.created_by,
+    )
+    assert row.status == ImportRowStatus.VALID
+    assert row.row_version == 3
+    assert row.current_values["email"] == "fixed@example.test"
+    assert row.original_validation_errors == [excel_error]
+
+
+def test_progress_rejects_overlength_contact_before_guest_persistence() -> None:
+    email_limit = getattr(Guest.__table__.columns.email.type, "length", None)
+    assert isinstance(email_limit, int)
+    suffix = "@example.test"
+    overlength_email = ("a" * (email_limit + 1 - len(suffix))) + suffix
+    parsed = parsed_workbook(
+        parsed_row(2, guest_values("Synthetic Overlength", email=overlength_email))
+    )
+    service, events, guests, imports, _, _ = build_service(parsed)
+    assert events.event is not None
+    batch = service.upload_workbook(
+        events.event.id,
+        administrator_id=events.event.created_by,
+        filename="synthetic-overlength.xlsx",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=b"synthetic workbook bytes",
+    )
+
+    result = service.progress_valid_rows(
+        events.event.id,
+        batch.id,
+        administrator_id=events.event.created_by,
+    )
+
+    row = imports.list_rows(batch.id, row_status=None, limit=10, offset=0)[0]
+    assert result == {"imported_rows": 0, "invalidated_rows": 1, "duplicate_rows": 0}
+    assert row.status == ImportRowStatus.INVALID
+    assert row.validation_errors == [
+        {"field": "email", "code": "INVALID_EMAIL", "message": "email is invalid"}
+    ]
+    assert guests.items == []
+
+
 def test_valid_unlinked_correction_requires_revalidation_and_preserves_restore_history() -> None:
     parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
     service, events, guests, imports, _, _ = build_service(parsed)

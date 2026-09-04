@@ -8,9 +8,22 @@ from dataclasses import dataclass
 from typing import Any, TypedDict
 
 from app.models.event import GuestFieldKey
+from app.models.guest import Guest
 
 _PHONE_ALLOWED = re.compile(r"^\+?[0-9 ()\-.]+$")
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _guest_persistence_text_limit(field_key: GuestFieldKey) -> int:
+    """Return one known Guest text-column limit from its authoritative model contract."""
+    length = getattr(Guest.__table__.columns[field_key.value].type, "length", None)
+    if not isinstance(length, int):
+        raise RuntimeError(f"Guest.{field_key.value} must have a bounded text persistence type")
+    return length
+
+
+_PHONE_NUMBER_MAX_LENGTH = _guest_persistence_text_limit(GuestFieldKey.PHONE_NUMBER)
+_EMAIL_MAX_LENGTH = _guest_persistence_text_limit(GuestFieldKey.EMAIL)
 
 
 class GuestFieldError(TypedDict):
@@ -86,14 +99,18 @@ def validate_guest_values(
             errors.append(error(GuestFieldKey.PHONE_NUMBER, "INVALID_PHONE", "phone is invalid"))
         else:
             digits = "".join(character for character in phone if character.isdigit())
-            if not _PHONE_ALLOWED.fullmatch(phone) or not 7 <= len(digits) <= 15:
+            if (
+                len(phone) > _PHONE_NUMBER_MAX_LENGTH
+                or not _PHONE_ALLOWED.fullmatch(phone)
+                or not 7 <= len(digits) <= 15
+            ):
                 errors.append(
                     error(GuestFieldKey.PHONE_NUMBER, "INVALID_PHONE", "phone is invalid")
                 )
 
     email = values.get(GuestFieldKey.EMAIL.value)
     if _is_enabled_with_value(GuestFieldKey.EMAIL, email, policies_by_key) and (
-        not isinstance(email, str) or not _valid_email(email)
+        not isinstance(email, str) or len(email) > _EMAIL_MAX_LENGTH or not _valid_email(email)
     ):
         errors.append(error(GuestFieldKey.EMAIL, "INVALID_EMAIL", "email is invalid"))
 

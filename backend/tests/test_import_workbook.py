@@ -71,7 +71,7 @@ def contact_value_at_length(field_key: GuestFieldKey, length: int) -> str:
     raise AssertionError(f"unsupported contact field: {field_key}")
 
 
-def workbook_with_excel_error(field_key: GuestFieldKey) -> bytes:
+def workbook_with_excel_error(field_key: GuestFieldKey, error_value: str = "#N/A") -> bytes:
     workbook = Workbook()
     worksheet = workbook.active
     assert worksheet is not None
@@ -106,7 +106,7 @@ def workbook_with_excel_error(field_key: GuestFieldKey) -> bytes:
         GuestFieldKey.TABLE_NUMBER: 6,
         GuestFieldKey.CATEGORY: 7,
     }
-    error_cell = worksheet.cell(row=2, column=field_columns[field_key], value="#N/A")
+    error_cell = worksheet.cell(row=2, column=field_columns[field_key], value=error_value)
     assert error_cell.data_type == "e"
     return save_workbook(workbook)
 
@@ -324,38 +324,13 @@ def test_merged_presentation_heading_remains_structural() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field_key", "currently_valid"),
-    [
-        (GuestFieldKey.FULL_NAME, True),
-        (GuestFieldKey.PHONE_NUMBER, False),
-        (GuestFieldKey.EMAIL, False),
-        (GuestFieldKey.INVITATION_TYPE, True),
-        (GuestFieldKey.ALLOWED_COMPANIONS, False),
-        (GuestFieldKey.TABLE_NUMBER, True),
-        (GuestFieldKey.CATEGORY, True),
-    ],
-)
-def test_excel_error_cell_current_validation_outcome(
-    field_key: GuestFieldKey,
-    currently_valid: bool,
-) -> None:
-    result = parse(workbook_with_excel_error(field_key))
-
-    assert [row.source_row_number for row in result.rows] == [2]
-    assert (result.rows[0].validation_errors == []) is currently_valid
-    if not currently_valid:
-        assert any(item["field"] == field_key.value for item in result.rows[0].validation_errors)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="Excel error-typed text cells are not yet rejected during normalization",
-)
-@pytest.mark.parametrize(
     "field_key",
     [
         GuestFieldKey.FULL_NAME,
+        GuestFieldKey.PHONE_NUMBER,
+        GuestFieldKey.EMAIL,
         GuestFieldKey.INVITATION_TYPE,
+        GuestFieldKey.ALLOWED_COMPANIONS,
         GuestFieldKey.TABLE_NUMBER,
         GuestFieldKey.CATEGORY,
     ],
@@ -364,8 +339,56 @@ def test_excel_error_cell_cannot_be_valid_guest_value(field_key: GuestFieldKey) 
     result = parse(workbook_with_excel_error(field_key))
     candidate = result.rows[0]
 
+    assert [row.source_row_number for row in result.rows] == [2]
     assert candidate.values[field_key.value] is None
-    assert any(item["field"] == field_key.value for item in candidate.validation_errors)
+    assert candidate.normalization_errors == [
+        {
+            "field": field_key.value,
+            "code": "EXCEL_ERROR_VALUE_NOT_ALLOWED",
+            "message": "Excel error cells are not allowed in guest fields",
+        }
+    ]
+    assert candidate.normalization_errors[0] in candidate.validation_errors
+    assert "#N/A" not in candidate.normalization_errors[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "error_value",
+    [
+        "#N/A",
+        "#VALUE!",
+        "#REF!",
+        "#DIV/0!",
+        "#NAME?",
+        "#NUM!",
+        "#NULL!",
+    ],
+)
+def test_known_excel_error_types_have_one_stable_normalization_error(error_value: str) -> None:
+    result = parse(workbook_with_excel_error(GuestFieldKey.CATEGORY, error_value))
+
+    assert result.rows[0].normalization_errors == [
+        {
+            "field": "category",
+            "code": "EXCEL_ERROR_VALUE_NOT_ALLOWED",
+            "message": "Excel error cells are not allowed in guest fields",
+        }
+    ]
+
+
+def test_literal_excel_error_text_in_a_normal_text_cell_is_not_retyped_as_an_error() -> None:
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.append(["Full Name", "Invitation Type"])
+    worksheet.append(["#N/A", "Family"])
+    worksheet["A2"].data_type = "s"
+
+    result = parse(save_workbook(workbook))
+
+    assert result.rows[0].values["full_name"] == "#N/A"
+    assert result.rows[0].normalization_errors == []
+    assert result.rows[0].validation_errors == []
 
 
 @pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
@@ -386,34 +409,6 @@ def test_contact_value_at_persistence_limit_is_accepted(field_key: GuestFieldKey
 
 @pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
 @pytest.mark.parametrize("extra_characters", [1, 100])
-def test_overlength_contact_currently_reaches_valid_parser_state(
-    field_key: GuestFieldKey,
-    extra_characters: int,
-) -> None:
-    limit = persistence_text_limit(field_key)
-    result = parse(
-        simple_workbook(
-            [
-                ["Full Name", "Invitation Type", field_key.value],
-                [
-                    "Guest Alpha",
-                    "Family",
-                    contact_value_at_length(field_key, limit + extra_characters),
-                ],
-            ]
-        )
-    )
-
-    assert len(result.rows[0].values[field_key.value]) == limit + extra_characters
-    assert result.rows[0].validation_errors == []
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="contact values are not yet bounded by their persisted guest columns",
-)
-@pytest.mark.parametrize("field_key", [GuestFieldKey.PHONE_NUMBER, GuestFieldKey.EMAIL])
-@pytest.mark.parametrize("extra_characters", [1, 100])
 def test_contact_value_must_fit_persistence_contract(
     field_key: GuestFieldKey,
     extra_characters: int,
@@ -432,7 +427,10 @@ def test_contact_value_must_fit_persistence_contract(
         )
     )
 
-    assert any(item["field"] == field_key.value for item in result.rows[0].validation_errors)
+    expected_code = "INVALID_PHONE" if field_key is GuestFieldKey.PHONE_NUMBER else "INVALID_EMAIL"
+    assert (field_key.value, expected_code) in {
+        (item["field"], item["code"]) for item in result.rows[0].validation_errors
+    }
 
 
 @pytest.mark.parametrize(

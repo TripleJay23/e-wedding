@@ -1683,10 +1683,6 @@ def test_valid_unlinked_correction_postgresql_state_history_duplicates_and_races
         engine.dispose()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="overlength staged contact values are not yet rejected before guest persistence",
-)
 def test_overlength_import_value_is_rejected_before_guest_persistence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

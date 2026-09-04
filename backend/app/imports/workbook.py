@@ -666,14 +666,21 @@ def _normalize_cell(
     field_key: GuestFieldKey,
     cell: Cell,
 ) -> tuple[str | int | None, GuestFieldError | None]:
-    value = cell.value
-    if value is None or value == "":
-        default = 0 if field_key is GuestFieldKey.ALLOWED_COMPANIONS else None
-        return default, None
+    if cell.data_type == "e":
+        return None, error(
+            field_key,
+            "EXCEL_ERROR_VALUE_NOT_ALLOWED",
+            "Excel error cells are not allowed in guest fields",
+        )
     if _cell_is_formula(cell):
         return None, error(
             field_key, "FORMULA_NOT_ALLOWED", "formulas are not allowed in guest rows"
         )
+
+    value = cell.value
+    if value is None or value == "":
+        default = 0 if field_key is GuestFieldKey.ALLOWED_COMPANIONS else None
+        return default, None
     if isinstance(value, (bool, date, datetime, time)):
         return None, error(field_key, "UNSUPPORTED_VALUE_TYPE", "cell value type is unsupported")
 
