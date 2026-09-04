@@ -47,6 +47,7 @@ _FORBIDDEN_PREFIXES = (
     "customUI/",
 )
 _FORBIDDEN_PARTS = {"xl/vbaProject.bin"}
+_WINDOWS_DRIVE_MEMBER = re.compile(r"^[A-Za-z]:")
 _HEADER_PUNCTUATION = re.compile(r"[^a-z0-9]+")
 _PHONE_LIKE = re.compile(r"^\+?[0-9 ()\-.]+$")
 _COMPANION_INTEGER_TEXT = re.compile(r"^(?P<integer>[0-9]+)(?:\.0+)?$")
@@ -263,8 +264,17 @@ class WorkbookParser:
 
         for worksheet in worksheets:
             sheet_candidates: list[_HeaderCandidate] = []
-            for row_number in range(1, min(worksheet.max_row, MAX_HEADER_SCAN_ROWS) + 1):
-                mapping, duplicated = _map_header_row(worksheet[row_number], aliases)
+            scan_end_row = min(worksheet.max_row, MAX_HEADER_SCAN_ROWS)
+            maximum_column = worksheet.max_column
+            for row_number, cells in enumerate(
+                worksheet.iter_rows(
+                    min_row=1,
+                    max_row=scan_end_row,
+                    max_col=maximum_column,
+                ),
+                start=1,
+            ):
+                mapping, duplicated = _map_header_row(cells, aliases)
                 if len(mapping) > len(best_partial):
                     best_partial = set(mapping)
                 if duplicated or not required.issubset(mapping) or len(mapping) < 2:
@@ -328,10 +338,19 @@ class WorkbookParser:
         event_companion_maximum: int,
     ) -> ParsedWorkbook:
         worksheet = candidate.worksheet
+        maximum_column = worksheet.max_column
         ignored: list[dict[str, int | str]] = []
-        for row_number in range(1, candidate.row_number):
-            reason = "BLANK" if _row_is_blank(worksheet[row_number]) else "PRESENTATION"
-            ignored.append({"row_number": row_number, "reason": reason})
+        if candidate.row_number > 1:
+            for row_number, cells in enumerate(
+                worksheet.iter_rows(
+                    min_row=1,
+                    max_row=candidate.row_number - 1,
+                    max_col=maximum_column,
+                ),
+                start=1,
+            ):
+                reason = "BLANK" if _row_is_blank(cells) else "PRESENTATION"
+                ignored.append({"row_number": row_number, "reason": reason})
 
         parsed_rows: list[ParsedGuestRow] = []
         seen_valid_fingerprints: set[str] = set()
@@ -342,8 +361,14 @@ class WorkbookParser:
         merged_ranges = tuple(worksheet.merged_cells.ranges)
         context = _GuestTableContext(candidate.row_number, [], set())
 
-        for row_number in range(candidate.row_number + 1, worksheet.max_row + 1):
-            cells = worksheet[row_number]
+        for row_number, cells in enumerate(
+            worksheet.iter_rows(
+                min_row=candidate.row_number + 1,
+                max_row=worksheet.max_row,
+                max_col=maximum_column,
+            ),
+            start=candidate.row_number + 1,
+        ):
             repeated_mapping = _safe_repeated_header_mapping(
                 cells,
                 aliases=aliases,
@@ -441,8 +466,15 @@ def _assess_header_candidate(
     merged_ranges = tuple(worksheet.merged_cells.ranges)
     context = _GuestTableContext(candidate.row_number, [], set())
 
-    for row_number in range(probe_start, probe_end + 1):
-        cells = worksheet[row_number]
+    maximum_column = worksheet.max_column
+    for row_number, cells in enumerate(
+        worksheet.iter_rows(
+            min_row=probe_start,
+            max_row=probe_end,
+            max_col=maximum_column,
+        ),
+        start=probe_start,
+    ):
         repeated_mapping = _safe_repeated_header_mapping(
             cells,
             aliases=aliases,
@@ -548,6 +580,7 @@ def _inspect_xlsx_package(workbook_bytes: bytes) -> None:
                 if (
                     normalized_name in names
                     or path.is_absolute()
+                    or _WINDOWS_DRIVE_MEMBER.match(normalized_name) is not None
                     or ".." in path.parts
                     or any(part == "" for part in path.parts)
                     or entry.flag_bits & 0x1

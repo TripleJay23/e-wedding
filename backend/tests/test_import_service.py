@@ -882,6 +882,56 @@ def test_upload_envelope_fails_before_parser(
     assert parser.calls == 0
 
 
+def test_upload_size_boundary_accepts_exact_limit_and_rejects_one_byte_over() -> None:
+    parsed = parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    accepted_service, accepted_events, _, _, accepted_parser, _ = build_service(parsed)
+    assert accepted_events.event is not None
+    accepted_service.upload_workbook(
+        accepted_events.event.id,
+        administrator_id=accepted_events.event.created_by,
+        filename="guests.xlsx",
+        content_type="application/octet-stream",
+        content=b"x" * 1_024,
+    )
+    assert accepted_parser.calls == 1
+
+    rejected_service, rejected_events, _, _, rejected_parser, rejected_storage = build_service(
+        parsed
+    )
+    assert rejected_events.event is not None
+    with pytest.raises(ImportUploadRejectedError) as exc_info:
+        rejected_service.upload_workbook(
+            rejected_events.event.id,
+            administrator_id=rejected_events.event.created_by,
+            filename="guests.xlsx",
+            content_type="application/octet-stream",
+            content=b"x" * 1_025,
+        )
+    assert exc_info.value.code == "WORKBOOK_TOO_LARGE"
+    assert rejected_parser.calls == 0
+    assert rejected_storage.stored == {}
+
+
+def test_macro_enabled_extension_is_rejected_before_parser() -> None:
+    service, events, _, _, parser, storage = build_service(
+        parsed_workbook(parsed_row(2, guest_values("Synthetic")))
+    )
+    assert events.event is not None
+
+    with pytest.raises(ImportUploadRejectedError) as exc_info:
+        service.upload_workbook(
+            events.event.id,
+            administrator_id=events.event.created_by,
+            filename="guests.xlsm",
+            content_type="application/vnd.ms-excel.sheet.macroEnabled.12",
+            content=b"PK synthetic",
+        )
+
+    assert exc_info.value.code == "UNSUPPORTED_FILE_TYPE"
+    assert parser.calls == 0
+    assert storage.stored == {}
+
+
 def test_parser_rejection_is_bounded_and_storage_is_not_called() -> None:
     service, events, _, _, parser, storage = build_service(
         parsed_workbook(parsed_row(2, guest_values("Synthetic")))

@@ -6,12 +6,14 @@ import asyncio
 import os
 from io import BytesIO
 from pathlib import Path
+from time import perf_counter
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from openpyxl import Workbook
 from sqlalchemy import create_engine, delete, func, inspect, select
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -194,6 +196,40 @@ def selectable_workbook(
                 index % 3,
                 f"T-{index:03d}",
                 "Friends",
+            ]
+        )
+    stream = BytesIO()
+    workbook.save(stream)
+    workbook.close()
+    return stream.getvalue()
+
+
+def scale_acceptance_workbook(*, candidate_rows: int = 5_000, invalid_rows: int = 100) -> bytes:
+    """Build one deterministic event-scale workbook without retaining row fixtures."""
+    workbook = Workbook(write_only=True)
+    worksheet = workbook.create_sheet("Synthetic 5000 Scale")
+    worksheet.append(
+        [
+            "Full Name",
+            "Invitation Type",
+            "Allowed Companions",
+            "Phone Number",
+            "Email",
+            "Table Number",
+            "Category",
+        ]
+    )
+    valid_rows = candidate_rows - invalid_rows
+    for index in range(candidate_rows):
+        worksheet.append(
+            [
+                f"Scale Guest {index:05d}",
+                ("Family" if index % 2 == 0 else "Individual") if index < valid_rows else None,
+                index % 3,
+                f"+2556{index:08d}",
+                f"scale-{index:05d}@example.test",
+                str(index % 500) if index % 2 == 0 else f"S-{index % 500}",
+                f"Scale Category {index % 10}",
             ]
         )
     stream = BytesIO()
@@ -1731,6 +1767,315 @@ def test_overlength_import_value_is_rejected_before_guest_persistence(
             administrator_id = administrator.id
 
         asyncio.run(exercise_overlength_persistence_boundary(settings, runtime, username))
+    finally:
+        runtime.close()
+        if administrator_id is not None:
+            with Session(engine) as session:
+                events = list(
+                    session.execute(
+                        select(Event).where(Event.created_by == administrator_id)
+                    ).scalars()
+                )
+                event_ids = [event.id for event in events]
+                if event_ids:
+                    session.execute(delete(ImportBatch).where(ImportBatch.event_id.in_(event_ids)))
+                for event in events:
+                    session.delete(event)
+                session.flush()
+                administrator = session.get(Administrator, administrator_id)
+                if administrator is not None:
+                    session.delete(administrator)
+                session.commit()
+        engine.dispose()
+
+
+async def exercise_scale_acceptance_api(
+    settings: Settings,
+    runtime: DatabaseRuntime,
+    username: str,
+) -> dict[str, float | int | str]:
+    app = create_app(
+        settings,
+        database_runtime=runtime,
+        authentication_security=AuthenticationSecurity.from_settings(settings),
+    )
+    workbook_content = scale_acceptance_workbook()
+    guest_identity_queries = 0
+
+    def count_guest_identity_query(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        nonlocal guest_identity_queries
+        normalized = " ".join(statement.casefold().split())
+        if (
+            normalized.startswith("select")
+            and "from guests" in normalized
+            and "guests.full_name" in normalized
+            and "guests.invitation_type" in normalized
+        ):
+            guest_identity_queries += 1
+
+    sqlalchemy_event.listen(runtime.engine, "before_cursor_execute", count_guest_identity_query)
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with (
+            app.router.lifespan_context(app),
+            httpx.AsyncClient(transport=transport, base_url="http://synthetic.test") as client,
+        ):
+            login = await client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "synthetic administrator password"},
+            )
+            assert login.status_code == 200
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+            created_event = await client.post(
+                "/api/v1/events",
+                headers=headers,
+                json={
+                    "event_name": "Synthetic 5000 Row Scale Acceptance",
+                    "bride_name": "Synthetic",
+                    "groom_name": "Scale",
+                    "event_datetime": "2027-06-12T14:30:00+03:00",
+                    "venue": "Synthetic Hall",
+                    "max_companions_per_invitation": 2,
+                },
+            )
+            assert created_event.status_code == 201, created_event.text
+            event_id = str(created_event.json()["id"])
+
+            upload_started = perf_counter()
+            upload = await client.post(
+                f"/api/v1/events/{event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        "synthetic-5000-scale.xlsx",
+                        workbook_content,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            upload_duration = perf_counter() - upload_started
+            assert upload.status_code == 201, upload.text
+            assert len(upload.content) < 25_000
+            upload_body = upload.json()
+            batch_id = str(upload_body["id"])
+            assert upload_body["candidate_row_count"] == 5_000
+            assert upload_body["reconciliation"]["currently_valid_staged_rows"] == 4_900
+            assert upload_body["reconciliation"]["currently_invalid_staged_rows"] == 100
+            assert "storage_key" not in upload_body
+            assert guest_identity_queries == 1
+
+            preview = await client.get(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=100",
+                headers=headers,
+            )
+            invalid_preview = await client.get(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows?status=INVALID&limit=1",
+                headers=headers,
+            )
+            assert preview.status_code == invalid_preview.status_code == 200
+            assert len(preview.json()["items"]) == 100
+            assert len(preview.content) < 150_000
+            first_three = preview.json()["items"][:3]
+            invalid_row = invalid_preview.json()["items"][0]
+
+            atomic_rejection = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": [first_three[2]["id"], invalid_row["id"]]},
+            )
+            assert atomic_rejection.status_code == 409
+            after_rejection = await client.get(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows?limit=3",
+                headers=headers,
+            )
+            assert [item["status"] for item in after_rejection.json()["items"]] == [
+                "VALID",
+                "VALID",
+                "VALID",
+            ]
+
+            selected_ids = [item["id"] for item in first_three[:2]]
+            selected = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": selected_ids},
+            )
+            repeated = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": selected_ids},
+            )
+            assert selected.status_code == repeated.status_code == 200
+            assert selected.json()["imported_rows"] == 2
+            assert repeated.json()["imported_rows"] == 0
+            assert guest_identity_queries == 3
+
+            progression_started = perf_counter()
+            progression = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+                headers=headers,
+            )
+            progression_duration = perf_counter() - progression_started
+            assert progression.status_code == 200, progression.text
+            assert progression.json()["imported_rows"] == 4_898
+            assert progression.json()["reconciliation"]["rows_already_imported"] == 4_900
+            assert progression.json()["reconciliation"]["remaining_unresolved_rows"] == 100
+            assert guest_identity_queries == 4
+
+            correction = await client.patch(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows/{invalid_row['id']}",
+                headers=headers,
+                json={"expected_version": 1, "values": {"invitation_type": "Family"}},
+            )
+            revalidation = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/rows/{invalid_row['id']}/revalidate",
+                headers=headers,
+            )
+            corrected_progression = await client.post(
+                f"/api/v1/events/{event_id}/imports/{batch_id}/progress",
+                headers=headers,
+                json={"staged_row_ids": [invalid_row["id"]]},
+            )
+            assert correction.status_code == revalidation.status_code == 200
+            assert revalidation.json()["status"] == "VALID"
+            assert corrected_progression.status_code == 200
+            assert corrected_progression.json()["imported_rows"] == 1
+            assert corrected_progression.json()["reconciliation"]["rows_already_imported"] == 4_901
+            assert (
+                corrected_progression.json()["reconciliation"]["currently_invalid_staged_rows"]
+                == 99
+            )
+            assert guest_identity_queries == 6
+
+            replay_started = perf_counter()
+            replay = await client.post(
+                f"/api/v1/events/{event_id}/imports",
+                headers=headers,
+                files={
+                    "workbook": (
+                        "synthetic-5000-scale.xlsx",
+                        workbook_content,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+            )
+            replay_duration = perf_counter() - replay_started
+            assert replay.status_code == 201, replay.text
+            replay_reconciliation = replay.json()["reconciliation"]
+            assert replay_reconciliation["duplicates"] == 4_900
+            assert replay_reconciliation["currently_invalid_staged_rows"] == 100
+            assert guest_identity_queries == 7
+
+            privacy_text = " ".join(
+                response.text for response in (atomic_rejection, selected, progression, replay)
+            )
+            assert "@example.test" not in privacy_text
+            assert "Scale Guest" not in privacy_text
+
+            return {
+                "event_id": event_id,
+                "batch_id": batch_id,
+                "workbook_bytes": len(workbook_content),
+                "detail_payload_bytes": len(upload.content),
+                "preview_payload_bytes": len(preview.content),
+                "upload_duration": upload_duration,
+                "progression_duration": progression_duration,
+                "replay_duration": replay_duration,
+                "guest_identity_queries": guest_identity_queries,
+            }
+    finally:
+        sqlalchemy_event.remove(runtime.engine, "before_cursor_execute", count_guest_identity_query)
+
+
+def test_five_thousand_row_postgresql_scale_partial_retry_and_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = configure_test_environment(monkeypatch, tmp_path)
+    assert disposable_alembic.main(["upgrade", "head"]) == 0
+    assert disposable_alembic.main(["check"]) == 0
+
+    assert DISPOSABLE_URL is not None
+    engine = create_engine(DISPOSABLE_URL, pool_pre_ping=True)
+    runtime = DatabaseRuntime(settings)
+    administrator_id: UUID | None = None
+    identifiers: dict[str, float | int | str] = {}
+    username = f"scale-admin-{uuid4().hex[:8]}"
+    try:
+        security = AuthenticationSecurity.from_settings(settings)
+        with Session(engine, expire_on_commit=False) as session:
+            administrator = AdministratorProvisioningService(
+                AdministratorRepository(session),
+                security.passwords,
+            ).provision(username, "synthetic administrator password")
+            administrator_id = administrator.id
+
+        identifiers = asyncio.run(exercise_scale_acceptance_api(settings, runtime, username))
+        print(
+            "H2.7_SCALE_METRICS "
+            f"workbook_bytes={int(identifiers['workbook_bytes'])} "
+            f"detail_payload_bytes={int(identifiers['detail_payload_bytes'])} "
+            f"preview_payload_bytes={int(identifiers['preview_payload_bytes'])} "
+            f"upload_seconds={float(identifiers['upload_duration']):.3f} "
+            f"progression_seconds={float(identifiers['progression_duration']):.3f} "
+            f"replay_seconds={float(identifiers['replay_duration']):.3f} "
+            f"guest_identity_queries={int(identifiers['guest_identity_queries'])}"
+        )
+
+        with Session(engine) as session:
+            event_id = UUID(str(identifiers["event_id"]))
+            batch_id = UUID(str(identifiers["batch_id"]))
+            assert (
+                session.scalar(
+                    select(func.count()).select_from(Guest).where(Guest.event_id == event_id)
+                )
+                == 4_901
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ImportBatchRow)
+                    .where(ImportBatchRow.batch_id == batch_id)
+                )
+                == 5_000
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ImportBatchRow)
+                    .where(
+                        ImportBatchRow.batch_id == batch_id,
+                        ImportBatchRow.status == ImportRowStatus.IMPORTED,
+                    )
+                )
+                == 4_901
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ImportBatchRow)
+                    .where(
+                        ImportBatchRow.batch_id == batch_id,
+                        ImportBatchRow.status == ImportRowStatus.INVALID,
+                    )
+                )
+                == 99
+            )
+
+        evidence_files = list(settings.IMPORT_EVIDENCE_STORAGE_ROOT.rglob("*.xlsx"))
+        assert len(evidence_files) == 2
+        assert all(path.name.endswith(".xlsx") for path in evidence_files)
+        assert not list(Path.cwd().glob("**/synthetic-5000-scale.xlsx"))
+        assert "@example.test" not in caplog.text
+        assert "Scale Guest" not in caplog.text
     finally:
         runtime.close()
         if administrator_id is not None:
