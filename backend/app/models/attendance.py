@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -37,6 +38,13 @@ class GateScanOutcome(StrEnum):
     SUPERSEDED_CREDENTIAL = "SUPERSEDED_CREDENTIAL"
     INELIGIBLE_GUEST = "INELIGIBLE_GUEST"
     COMPANION_LIMIT_EXCEEDED = "COMPANION_LIMIT_EXCEEDED"
+
+
+class GateArrivalMode(StrEnum):
+    """Persisted arrival kind for current and future gate transitions."""
+
+    PRIMARY = "PRIMARY"
+    COMPANION = "COMPANION"
 
 
 class AttendancePersistenceError(ValueError):
@@ -109,6 +117,79 @@ class GuestAttendanceRecord(Base):
         return 1 + self.companions_admitted
 
 
+class GuestCompanionEntitlement(Base):
+    """Current cumulative companion entitlement for one event invitation."""
+
+    __tablename__ = "guest_companion_entitlements"
+    __table_args__ = (
+        CheckConstraint(
+            f"declared_companions BETWEEN 0 AND {MAX_COMPANIONS_PER_INVITATION}",
+            name="ck_guest_companion_entitlements_declared_bounded",
+        ),
+        CheckConstraint(
+            "companions_admitted >= 0 AND companions_admitted <= declared_companions",
+            name="ck_guest_companion_entitlements_admitted_bounded",
+        ),
+        CheckConstraint(
+            "(primary_attendance_id IS NOT NULL AND establishing_correction_id IS NULL) "
+            "OR (primary_attendance_id IS NULL AND establishing_correction_id IS NOT NULL)",
+            name="ck_guest_companion_entitlements_origin_xor",
+        ),
+        ForeignKeyConstraint(
+            ["guest_id", "event_id"],
+            ["guests.id", "guests.event_id"],
+            name="fk_guest_companion_entitlements_guest_event",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["primary_attendance_id", "event_id", "guest_id"],
+            [
+                "guest_attendance_records.id",
+                "guest_attendance_records.event_id",
+                "guest_attendance_records.guest_id",
+            ],
+            name="fk_guest_companion_entitlements_attendance_event_guest",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["establishing_correction_id", "event_id", "guest_id"],
+            [
+                "guest_attendance_corrections.id",
+                "guest_attendance_corrections.event_id",
+                "guest_attendance_corrections.guest_id",
+            ],
+            name="fk_guest_companion_entitlements_correction_event_guest",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "event_id",
+            "guest_id",
+            name="uq_guest_companion_entitlements_event_guest",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    event_id: Mapped[UUID] = mapped_column(ForeignKey("events.id", ondelete="RESTRICT"))
+    guest_id: Mapped[UUID] = mapped_column()
+    primary_attendance_id: Mapped[UUID | None] = mapped_column()
+    establishing_correction_id: Mapped[UUID | None] = mapped_column()
+    declared_companions: Mapped[int] = mapped_column(SmallInteger)
+    companions_admitted: Mapped[int] = mapped_column(
+        SmallInteger,
+        default=0,
+        server_default=text("0"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class GateScanAttempt(Base):
     """One append-only, privacy-safe record of a meaningful authenticated scan."""
 
@@ -127,6 +208,29 @@ class GateScanAttempt(Base):
         CheckConstraint(
             f"requested_companions BETWEEN 0 AND {MAX_COMPANIONS_PER_INVITATION}",
             name="ck_gate_scan_attempts_requested_companions_bounded",
+        ),
+        CheckConstraint(
+            f"requested_declared_companions IS NULL OR "
+            f"requested_declared_companions BETWEEN 0 AND {MAX_COMPANIONS_PER_INVITATION}",
+            name="ck_gate_scan_attempts_requested_declaration_bounded",
+        ),
+        CheckConstraint(
+            f"companions_admitted_this_scan IS NULL OR "
+            f"companions_admitted_this_scan BETWEEN 0 AND {MAX_COMPANIONS_PER_INVITATION}",
+            name="ck_gate_scan_attempts_companion_delta_bounded",
+        ),
+        CheckConstraint(
+            "(declared_companions_after IS NULL AND companions_admitted_after IS NULL) OR "
+            "(declared_companions_after IS NOT NULL "
+            "AND companions_admitted_after IS NOT NULL "
+            "AND companions_admitted_after >= 0 "
+            "AND companions_admitted_after <= declared_companions_after "
+            f"AND declared_companions_after <= {MAX_COMPANIONS_PER_INVITATION})",
+            name="ck_gate_scan_attempts_post_entitlement_state",
+        ),
+        CheckConstraint(
+            "arrival_mode IN ('PRIMARY', 'COMPANION')",
+            name="ck_gate_scan_attempts_arrival_mode",
         ),
         CheckConstraint(
             "(outcome IN ('ADMITTED', 'ALREADY_CHECKED_IN') "
@@ -178,11 +282,16 @@ class GateScanAttempt(Base):
             "scanned_at",
             "id",
         ),
+        UniqueConstraint(
+            "event_id",
+            "request_id",
+            name="uq_gate_scan_attempts_event_request",
+        ),
         Index(
-            "uq_gate_scan_attempts_one_admitted_attendance",
+            "uq_gate_scan_attempts_one_primary_admitted_attendance",
             "attendance_id",
             unique=True,
-            postgresql_where=text("outcome = 'ADMITTED'"),
+            postgresql_where=text("outcome = 'ADMITTED' AND arrival_mode = 'PRIMARY'"),
         ),
     )
 
@@ -202,6 +311,22 @@ class GateScanAttempt(Base):
         )
     )
     requested_companions: Mapped[int] = mapped_column(SmallInteger)
+    request_id: Mapped[UUID] = mapped_column(server_default=text("gen_random_uuid()"))
+    arrival_mode: Mapped[GateArrivalMode] = mapped_column(
+        Enum(
+            GateArrivalMode,
+            name="gate_arrival_mode",
+            native_enum=False,
+            create_constraint=False,
+            length=9,
+        ),
+        server_default=text("'PRIMARY'"),
+    )
+    requested_declared_companions: Mapped[int | None] = mapped_column(SmallInteger)
+    primary_admitted_this_scan: Mapped[bool | None] = mapped_column(Boolean)
+    companions_admitted_this_scan: Mapped[int | None] = mapped_column(SmallInteger)
+    declared_companions_after: Mapped[int | None] = mapped_column(SmallInteger)
+    companions_admitted_after: Mapped[int | None] = mapped_column(SmallInteger)
     scanned_by: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     scanned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

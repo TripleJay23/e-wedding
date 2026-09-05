@@ -1,7 +1,13 @@
 """SQLAlchemy domain models."""
 
 from app.models.administrator import Administrator, AdministratorRole
-from app.models.attendance import GateScanAttempt, GateScanOutcome, GuestAttendanceRecord
+from app.models.attendance import (
+    GateArrivalMode,
+    GateScanAttempt,
+    GateScanOutcome,
+    GuestAttendanceRecord,
+    GuestCompanionEntitlement,
+)
 from app.models.attendance_corrections import (
     AttendanceCorrectionDecision,
     AttendanceCorrectionReason,
@@ -49,6 +55,7 @@ __all__ = [
     "EventGuestField",
     "EventPhoto",
     "EventStatus",
+    "GateArrivalMode",
     "GateScanAttempt",
     "GateScanOutcome",
     "GeneratedCardStatus",
@@ -56,6 +63,7 @@ __all__ = [
     "Guest",
     "GuestAttendanceCorrection",
     "GuestAttendanceRecord",
+    "GuestCompanionEntitlement",
     "GuestFieldKey",
     "GuestQrCredential",
     "GuestStatus",

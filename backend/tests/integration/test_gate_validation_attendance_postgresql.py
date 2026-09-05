@@ -417,7 +417,7 @@ def test_m7_postgresql_api_constraints_concurrency_queries_and_timings(
         assert {
             "ix_gate_scan_attempts_event_scanned_id",
             "ix_gate_scan_attempts_fingerprint_scanned_id",
-            "uq_gate_scan_attempts_one_admitted_attendance",
+            "uq_gate_scan_attempts_one_primary_admitted_attendance",
         } <= {index["name"] for index in inspector.get_indexes("gate_scan_attempts")}
         assert "credential" not in {
             column["name"] for column in inspector.get_columns("gate_scan_attempts")

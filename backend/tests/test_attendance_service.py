@@ -486,7 +486,7 @@ def test_c21_current_qr_regeneration_does_not_reset_guest_attendance() -> None:
     assert attendance.companions_admitted == 1
 
 
-def test_c21_current_retries_have_no_request_id_and_create_distinct_attempts() -> None:
+def test_c22_request_id_persistence_does_not_add_domain_replay() -> None:
     service, repository, event, _, _, raw = build_service()
     for _ in range(2):
         service.scan(
@@ -497,13 +497,13 @@ def test_c21_current_retries_have_no_request_id_and_create_distinct_attempts() -
         )
 
     assert "request_id" not in GateScanRequest.model_fields
-    assert "request_id" not in GateScanAttempt.__table__.columns
+    assert "request_id" in GateScanAttempt.__table__.columns
     assert len(repository.attendance) == 1
     assert len({attempt.id for attempt in repository.attempts}) == 2
 
 
-def test_c21_current_scan_attempt_evidence_field_inventory() -> None:
-    future_fields = {
+def test_c22_scan_attempt_evidence_field_inventory() -> None:
+    persisted_fields = {
         "request_id",
         "arrival_mode",
         "requested_declared_companions",
@@ -513,7 +513,7 @@ def test_c21_current_scan_attempt_evidence_field_inventory() -> None:
         "companions_admitted_after",
     }
 
-    assert future_fields.isdisjoint(GateScanAttempt.__table__.columns.keys())
+    assert persisted_fields <= set(GateScanAttempt.__table__.columns.keys())
     assert set(GateScanAttempt.__table__.columns.keys()) == {
         "id",
         "event_id",
@@ -523,6 +523,13 @@ def test_c21_current_scan_attempt_evidence_field_inventory() -> None:
         "attendance_id",
         "outcome",
         "requested_companions",
+        "request_id",
+        "arrival_mode",
+        "requested_declared_companions",
+        "primary_admitted_this_scan",
+        "companions_admitted_this_scan",
+        "declared_companions_after",
+        "companions_admitted_after",
         "scanned_by",
         "scanned_at",
     }
@@ -562,6 +569,16 @@ def _scan_command_has_arrival_mode() -> bool:
 def test_c21_target_declaration_information_is_preserved() -> None:
     table = _future_entitlement_table()
     assert table is not None
+    service, repository, event, _, _, raw = build_service()
+
+    service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=1,
+        administrator_id=event.created_by,
+    )
+
+    assert repository.attempts[-1].requested_declared_companions == 1
 
 
 @pytest.mark.xfail(
@@ -616,10 +633,6 @@ def test_c21_target_non_active_event_rejects_admission(status: EventStatus) -> N
     assert repository.attendance == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: conflicting first declarations produce one authoritative entitlement state",
-)
 def test_c21_target_conflicting_declarations_have_one_persistence_winner() -> None:
     table = _future_entitlement_table()
     assert table is not None
@@ -631,10 +644,6 @@ def test_c21_target_conflicting_declarations_have_one_persistence_winner() -> No
     assert frozenset({"event_id", "guest_id"}) in unique_column_sets
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: concurrent last-slot admission cannot exceed the declared companion count",
-)
 def test_c21_target_last_slot_is_protected_by_persistence_invariant() -> None:
     table = _future_entitlement_table()
     assert table is not None
@@ -670,12 +679,21 @@ def test_c21_target_scan_attempt_records_entitlement_transition() -> None:
         "companions_admitted_after",
     }
     assert required <= set(GateScanAttempt.__table__.columns.keys())
+    service, repository, event, _, _, raw = build_service()
+
+    service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=1,
+        administrator_id=event.created_by,
+    )
+
+    attempt = repository.attempts[-1]
+    assert attempt.primary_admitted_this_scan is True
+    assert attempt.declared_companions_after == 1
+    assert attempt.companions_admitted_after == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: persist one cumulative entitlement state per event and guest",
-)
 def test_c21_target_entitlement_persistence_is_unique_per_event_guest() -> None:
     table = _future_entitlement_table()
     assert table is not None
