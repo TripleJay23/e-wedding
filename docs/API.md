@@ -26,6 +26,11 @@ Under `/events/{event_id}/imports` the API supports upload, history, batch detai
 reconciliation, row listing, row correction, row and batch revalidation, and batch
 progression.
 
+Upload accepts only a bounded `.xlsx` envelope. Import history and staged-row
+lists are paged; list page size is at most 100, so a 5,000-candidate workbook never
+returns all staged rows in one response. Batch detail contains bounded aggregate,
+mapping, policy, and reconciliation evidence rather than an embedded full row set.
+
 `POST /events/{event_id}/imports/{batch_id}/progress` keeps its original batch-wide
 behavior when called without a body. An optional non-empty, unique
 `staged_row_ids` list selects exact persisted staged-row UUIDs. The complete
@@ -35,8 +40,10 @@ unselected rows remain unchanged.
 
 Correcting an unlinked `VALID`, `INVALID`, or `DUPLICATE` row requires its expected
 version and moves it to pending revalidation. Imported or guest-linked rows cannot
-be corrected through the staging surface. Original values and revision evidence
-remain preserved.
+be corrected through the staging surface. The normalized original canonical
+snapshot, source row, current corrected values, and revision evidence remain
+preserved. Full cell-level source evidence remains in the protected original
+workbook.
 
 ### QR credentials
 

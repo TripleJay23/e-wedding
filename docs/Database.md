@@ -3,6 +3,9 @@
 PostgreSQL 17 is authoritative. Alembic maintains one linear migration chain from
 `20260814_0001` through the sole head `20260821_0008`.
 
+H2 Excel hardening changed parser/service behavior and tests only; it introduced no
+migration, table, column, or breaking API contract.
+
 ## Persisted entities
 
 - `users`: singleton administrator identity, Argon2id hash, role, active state,
@@ -46,8 +49,9 @@ Reports are calculated on demand and have no report-storage table or setting.
 - guest/import/QR/card/attendance data remains event scoped;
 - event companion maximum is `0..2`, defaults to 2, and guest/admitted values
   cannot exceed persisted policy;
-- original import snapshots are immutable; corrections and revalidations append
-  revision evidence; progression selections lock and validate all selected rows;
+- normalized original canonical import snapshots are immutable; current corrected
+  values remain separate; corrections and revalidations append revision evidence;
+  progression selections lock and validate all selected rows;
 - QR verifier hashes are unique and one current lifecycle identity is enforced;
 - template and design revision identities are immutable; permanent cards pin all
   accepted render inputs;
@@ -62,3 +66,7 @@ Development, disposable test, staging, and production identities are separate.
 Migration commands must verify the connected database and revision before action.
 Tests must never fall back to development or staging. Schema history must not be
 squashed during release cleanup.
+
+The current schema stores invitation maximum capacity and actual gate admission;
+it does not implement a first-scan declared-companion lock. Any future companion
+entitlement lifecycle schema is a separate design decision after H2.

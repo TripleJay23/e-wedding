@@ -5,12 +5,12 @@ and reporting platform. Its accepted backend uses FastAPI and PostgreSQL.
 
 ## Release status
 
-Backend capabilities through reporting have completed the continuous staging
-acceptance journey. Repository cleanup and legacy-repository retirement are
-complete, the final local rename is complete, and `main` has been promoted. A
-private GitHub repository is established with `main`, `staging`, and `dev`
-published. GitHub Engineering Automation is the next phase; GitHub Actions has not
-yet been implemented, and Flutter work has not started.
+The FastAPI/PostgreSQL backend is implemented and release-tested through reports.
+Its staged Excel ingestion subsystem is hardened through H2, including hostile
+package checks and 5,000-candidate acceptance. The private GitHub repository has
+operational backend CI and review-first Dependabot updates. Flutter has not been
+implemented; companion entitlement lifecycle hardening remains a separately
+authorized backend checkpoint before Flutter begins.
 
 ## Capabilities
 
@@ -95,10 +95,11 @@ production targets.
 
 ## Quality gate
 
-The accepted release reference is 537 passed tests, 4 deliberate staging-only
-skips, and 91.12% branch-aware coverage. The repository also requires Ruff, format,
-compile, locked dependency, build/archive, Alembic lifecycle, Compose, privacy,
-secret, and documentation checks. See `docs/TestingStrategy.md`.
+The dated H2.7 acceptance baseline is 739 collected, 735 passed, 4 deliberate
+staging-only skips, no failures or warnings, and 92.20% branch-aware coverage.
+The repository also requires Ruff, format, compile, locked dependency,
+build/archive, Alembic lifecycle, Compose, privacy, secret, and documentation
+checks. See `docs/TestingStrategy.md`.
 
 ## Security and privacy
 
@@ -127,5 +128,6 @@ the accepted `/api/v1` contract without weakening backend security or privacy.
 Start with `AGENTS.md`, then see `docs/Architecture.md`, `docs/API.md`,
 `docs/Environment.md`, `docs/Security.md`, and `docs/Workflow.md`.
 
-This repository is currently proprietary. It does not claim an open-source
-license; publication licensing is a separate owner decision recorded in `LICENSE`.
+This repository remains private and proprietary. It does not claim an open-source
+license; public publication readiness and licensing remain separate owner
+decisions recorded in `LICENSE`.

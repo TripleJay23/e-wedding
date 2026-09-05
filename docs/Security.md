@@ -34,11 +34,36 @@ metadata before persistence.
 
 ## Excel security
 
-The importer validates actual XLSX ZIP structure, bounds compressed and expanded
-content, rejects unsafe relationships/features and path tricks, loads formulas as
-formulas with `data_only=False`, and never evaluates them. Ambiguous mapping fails
-closed. Malformed genuine rows remain visible to the administrator; errors and
-logs do not disclose row values.
+The upload envelope accepts only `.xlsx` with the configured XLSX/octet-stream
+media types and at most 10 MiB. Package inspection rejects malformed ZIP/XLSX,
+more than 2,000 entries, more than 50 MiB total expanded content, any entry over
+20 MiB, or compression ratio over 250:1. Duplicate, encrypted, parent-traversal,
+absolute, empty-component, and Windows drive-prefixed member names are rejected.
+
+XLSM envelopes, VBA parts, ActiveX, embedded objects, custom UI, and external
+workbook parts are rejected where represented by the implemented forbidden package
+parts/prefixes. Ordinary external hyperlink relationships may remain only as inert
+metadata: the importer uses `keep_links=False`, makes no network calls, and never
+dereferences them. Other non-active custom parts are not globally allowlisted;
+they remain inert and subject to the same entry/expansion bounds. This contract
+does not claim explicit rejection of every possible relationship type.
+
+Formulas load as formulas with `data_only=False` and are never evaluated. A
+formula in a guest row is invalid unless the whole row is independently proven to
+be a supported structural aggregate. Excel error-typed cells receive deterministic
+field-associated invalidation, while literal normal text `"#N/A"` is not
+automatically treated as an Excel error. Unsupported types remain invalid.
+
+Only visible sheets participate in bounded table discovery. Genuine ambiguity
+fails closed with `AMBIGUOUS_GUEST_TABLE`; malformed and uncertain post-header
+rows remain visible to the administrator. Candidate count is capped at 5,000,
+worksheet dimensions at 10,000 rows by 100 columns, and header/probe scans at 100
+rows each. Errors and logs do not disclose row values.
+
+Successful imports keep the original workbook in protected evidence storage.
+Known persistence failures after a write clean up that artifact. A process crash
+between evidence write and database commit may leave a recoverable orphan; this is
+accepted H2 operational recovery debt and does not imply corrupted committed data.
 
 ## QR security
 

@@ -24,17 +24,34 @@ Use fast-forward integration where required. Never push, fetch, pull, change
 remotes, force-push, rebase accepted history, or amend an accepted commit without
 explicit authorization.
 
+## GitHub quality gate
+
+The operational `Backend CI` workflow runs the `Backend Quality Gate` for pull
+requests targeting and pushes to `dev`, `staging`, and `main`, and by manual
+`workflow_dispatch`. It uses synthetic private storage and disposable PostgreSQL
+17; canonical staging and private Wedding Floral assets are deliberately absent.
+The gate covers privacy/history audits, the locked environment, Ruff, formatting,
+compile, Compose parsing, Alembic lifecycle, repository-safe tests with at least
+90% branch coverage, and wheel/sdist archive hygiene.
+
+G3C hosted branch-protection/ruleset enforcement is deferred because the private
+GitHub plan does not provide the required control. It must not be described as
+enabled. Until separately authorized, review and linear fast-forward promotion are
+procedurally enforced.
+
 ## Dependency automation
 
 Dependabot version updates target `dev`, entering the established promotion flow
-from `dev` to `staging` to `main`. The backend uses Dependabot's native `uv`
-ecosystem, while GitHub Actions remain pinned to immutable commit SHAs. Every
-dependency pull request requires the Backend Quality Gate and human review;
-Dependabot auto-merge is not enabled.
+from `dev` to `staging` to `main`. Weekly review-first updates cover the backend's
+native `uv` ecosystem and GitHub Actions; actions remain pinned to immutable commit
+SHAs. Every dependency pull request requires the Backend Quality Gate and human
+review; Dependabot auto-merge is not enabled.
 
 The separately pinned uv CLI version remains a manually reviewed maintenance
-item. Automated updates for the verified PostgreSQL container image digest are
-deferred until the initial uv and GitHub Actions automation is proven.
+item. Major dependency acceptance compares collection, skip/xfail/warning
+inventory, plugins and fixtures, branch coverage, Windows behavior, disposable
+PostgreSQL behavior, and private-API usage before promotion. Automated updates for
+the verified PostgreSQL container digest remain outside current Dependabot scope.
 
 ## Failure workflow
 
@@ -72,3 +89,7 @@ match current source, migrations, tests, and runtime evidence. Release preparati
 also verifies archive hygiene, publication exclusions, licensing position, and
 Git state. Repository rename, remote configuration, publication, main movement,
 and Flutter work each require their own explicit checkpoint.
+
+After H2 closeout, the next backend checkpoint is **C1 — Companion Entitlement
+Lifecycle Current-State Audit & Contract**. It precedes Flutter and does not imply
+that first-scan companion declaration locking already exists.

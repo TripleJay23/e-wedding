@@ -12,8 +12,12 @@
   storage boundaries, and complete feature behavior;
 - staging acceptance preserves one continuous product journey through reports.
 
-The repository contains 52 test modules plus `conftest.py`: 41 regular modules and
-11 opt-in PostgreSQL integration modules.
+Repository-safe GitHub CI uses only synthetic resources. Ignored Wedding Floral
+package/font tests are a separate protected local release layer. Disposable
+PostgreSQL integration tests use an explicit guarded test URL; staging-only
+operator tests remain skipped outside their separately authorized environment.
+Excel has dedicated hostile-package/type tests and a synthetic 5,000-candidate
+scale acceptance. Generic GitHub CI does not run canonical staging acceptance.
 
 ## Database safety
 
@@ -24,8 +28,11 @@ and missing or ambiguous targets. Canonical staging is never a test fallback.
 
 ## Release quality gate
 
-The accepted reference is 537 passed tests, 4 deliberate staging-only skips, and
-91.12% branch-aware coverage. Release-impacting changes require:
+The dated H2.7 reference on 2026-09-05 is 739 collected, 735 passed, 4 deliberate
+staging-only skips, no failures, xfails, xpasses, or warnings, and 92.20%
+branch-aware coverage. It is a checkpoint baseline, not an eternal suite-size
+promise. The H2.8 documentation-only closeout rerun preserved the same inventory,
+outcomes, and coverage. Release-impacting changes require:
 
 - focused and complete backend tests with at least 90% branch-aware coverage;
 - Ruff lint and format checks;
@@ -35,6 +42,21 @@ The accepted reference is 537 passed tests, 4 deliberate staging-only skips, and
 - Alembic upgrade/current/heads/check and one-revision downgrade/re-upgrade;
 - Compose parse/configuration validation;
 - private-file, secret-pattern, PII, and documentation-reference audits.
+
+## H2 scale evidence
+
+H2.7 accepted the 5,000-candidate product ceiling. Synthetic parser samples were
+approximately 0.027–0.032 seconds for 100 rows, 0.171–0.209 seconds for 1,000, and
+0.700–0.772 seconds for 5,000, with about 17.72 MiB traced Python allocation at
+5,000. The PostgreSQL scenario staged 4,900 valid and 100 invalid rows, applied one
+representative correction, and finished with 4,901 imported plus 99 intentionally
+invalid rows—no missing, extra, or duplicated candidates.
+
+Measured upload/staging was about 1.804 seconds, 4,898-row progression 27.806
+seconds, duplicate replay 2.106 seconds, and the test body 34.42 seconds. These
+measurements classify the current implementation as **acceptable for 5,000**;
+they are not deployment SLAs. Bounded `iter_rows` traversal avoids repeated indexed
+row access and quadratic openpyxl maximum-column recomputation.
 
 ## Privacy and fixtures
 

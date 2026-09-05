@@ -22,6 +22,11 @@ The application includes authentication, events and guests, complete staged Exce
 imports, QR lifecycle, template/photo/design/card workflows, gate attendance,
 append-only corrections, and JSON/CSV/XLSX reports.
 
+Excel ingestion is hardened through H2: bounded XLSX/package inspection,
+deterministic visible-sheet and header selection, structural-row safety,
+correction/revalidation, exact or batch-wide progression, hostile-package tests,
+and 5,000-candidate acceptance. API pages remain bounded to at most 100 rows.
+
 Use `wedding-alembic` only for guarded development migration operations. Use
 `wedding-disposable-alembic` with `APP_ENV=test` and an explicitly named local
 `wedding_ecard_disposable_*` database for disposable integration work. Staging

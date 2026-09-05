@@ -61,16 +61,23 @@ claims; protected requests reload the persisted active administrator.
 ## Excel import
 
 ```text
-bounded XLSX bytes -> package validation -> sheet/header detection
--> deterministic mapping -> structural classification -> lossless normalization
--> row/duplicate validation -> persisted batch and rows -> partial progression
--> correction -> explicit revalidation -> later progression and reconciliation
+bounded XLSX envelope/package validation
+-> visible-sheet and bounded header-candidate discovery
+-> deterministic semantic header mapping and candidate viability selection
+-> row-by-row structural classification -> field-specific normalization
+-> policy validation and duplicate analysis -> persisted batch/staged evidence
+-> bounded preview -> correction/revalidation -> partial or exact progression
+-> reconciliation
 ```
 
 Formulas are inspected as formulas and never executed. Structural rows require
-strong contextual evidence; malformed genuine rows remain visible. Original row
-snapshots and revision history are retained while current corrected values evolve
-under optimistic version checks.
+strong contextual evidence; malformed and uncertain post-header rows remain
+visible. The database retains an immutable normalized original canonical snapshot,
+current corrected canonical values, source-row association, and revision history.
+The protected original XLSX—not staged canonical JSON—preserves complete source
+evidence such as display formatting, outer whitespace, original email casing, and
+formula/error cell characteristics. Selection and parsing make no network or AI
+calls.
 
 ## Templates and permanent cards
 

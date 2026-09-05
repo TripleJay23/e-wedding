@@ -1,9 +1,10 @@
 # Backend Milestones and Release Status
 
 Backend product milestones and release finalization through F7A are complete.
-GitHub Engineering Automation remains sequential; a later checkpoint does not
-authorize an earlier or unrelated operation. The accepted product display name is
-`e-Wedding` and the local repository slug is `e-wedding`.
+GitHub CI and Dependabot are operational, and Excel ingestion is hardened through
+H2. A later checkpoint does not authorize an earlier or unrelated operation. The
+accepted product display name is `e-Wedding` and the local repository slug is
+`e-wedding`.
 
 | Milestone | Durable outcome | Status |
 |---|---|---|
@@ -40,11 +41,44 @@ that release suite.
 | F7A | Main promotion by pure fast-forward and permanent-branch convergence | PASS |
 | GitHub private repository baseline | Private `e-wedding` repository configured | COMPLETE |
 | Permanent branch publication | `main`, `staging`, and `dev` pushed | COMPLETE |
-| G1 | GitHub Actions CI architecture and repository readiness | CURRENT |
-| G2 | GitHub Actions CI implementation | NEXT IF G1 PASSES |
+| G1 | GitHub Actions CI architecture and repository readiness | COMPLETE |
+| G2 | GitHub Actions CI implementation | COMPLETE |
+| G3 | Live GitHub Actions verification | PASS |
+| G3C | Hosted branch-protection/ruleset enforcement | DEFERRED — PRIVATE PLAN |
+| G4 | Review-first Dependabot automation for uv and GitHub Actions | COMPLETE |
+| G4 accepted updates | Ruff 0.16.5, setup-uv 10.0.1, pytest 9.1.1; uv CLI retained at 0.11.14 | COMPLETE |
 | Flutter | Administrator and gate client implementation | NOT STARTED |
 
-GitHub Actions has not yet been implemented. The public license, public sample
-strategy, Docker identity or volume migration, deployment, future remote changes
-or pushes, and Flutter work require their own explicit authorization. Do not infer
-them from the private GitHub baseline or completion of F7A.
+Backend CI runs on pull requests targeting and pushes to `dev`, `staging`, and
+`main`, plus `workflow_dispatch`. G3C is not enabled: procedural review and linear
+fast-forward promotion remain authoritative because the private GitHub plan blocks
+the required hosted enforcement.
+
+## Excel hardening
+
+| Checkpoint | Durable outcome | Status |
+|---|---|---|
+| H1 | Current-state Excel contract and documentation audit | COMPLETE |
+| H2.1 | Synthetic characterization of unsafe ingestion boundaries | COMPLETE |
+| H2.2 | Field normalization and persistence-boundary hardening | COMPLETE |
+| H2.3 | Structural-row safety and candidate visibility | COMPLETE |
+| H2.4 | Visible-sheet and header-selection resilience | COMPLETE |
+| H2.5 | Collision-free deterministic alias flexibility | COMPLETE |
+| H2.6 | Repeated-header and noisy data-region hardening | COMPLETE |
+| H2.7 | Hostile-package security and 5,000-candidate scale acceptance | PASS |
+| H2.8 | Documentation, final reconciliation, and release verification | COMPLETE |
+
+H2 introduced no migrations or breaking API changes; schema head remains
+`20260821_0008`. The dated H2.7 baseline is 739 collected, 735 passed, 4
+staging-only skips, no failures or warnings, and 92.20% branch-aware coverage.
+
+The next backend checkpoint after H2 is **C1 — Companion Entitlement Lifecycle
+Current-State Audit & Contract**. Current reporting distinguishes invitation
+holders, companion capacity, maximum invited population, actual admitted
+companions, and actual attendance. The planned first-scan declaration lock,
+remaining-slot semantics, and any schema/API changes are not implemented yet.
+Flutter therefore remains not started and is not the next checkpoint.
+
+The public license, public sample strategy, Docker identity or volume migration,
+deployment, future remote changes or pushes, C1 implementation, and Flutter work
+require their own explicit authorization.

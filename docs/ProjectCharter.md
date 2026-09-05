@@ -16,9 +16,12 @@ converged. Repository cleanup, legacy-repository retirement, and the final local
 rename to `e-wedding` are complete.
 
 A private GitHub repository is established and the three permanent branches have
-been pushed. GitHub Engineering Automation is the next engineering phase; GitHub
-Actions has not yet been implemented. Flutter remains intentionally deferred until
-the GitHub automation foundation is established.
+been pushed. Backend GitHub Actions CI is operational, Dependabot automation is
+complete, and GitHub-hosted branch protection/ruleset enforcement is deferred
+because of the private-plan limitation; the linear fast-forward procedure remains
+mandatory. Excel ingestion is hardened through H2. Flutter remains intentionally
+unimplemented and deferred until companion entitlement lifecycle hardening is
+separately audited, contracted, and completed.
 
 ## Primary user
 
@@ -69,5 +72,9 @@ Backend technical release finalization and the authorized private-repository
 baseline are complete. The accepted technical release evidence remains associated
 with `6891e644472e81d5bc3690dc9ebc53fff9511ebf`; a later documentation-only
 governance commit does not imply that the full release suite was rerun on that
-newer commit. Public licensing or publication, deployment, future remote changes
-or pushes, and Flutter implementation remain separately controlled work.
+newer commit. H2 has a separate dated closeout baseline. Companion entitlement
+lifecycle hardening remains the next backend program; it must distinguish
+invitation maximum, first-scan declared entitlement, remaining slots, and actual
+admission without treating that planned behavior as implemented. Public licensing
+or publication, deployment, future remote changes or pushes, and Flutter
+implementation remain separately controlled work.
