@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -28,7 +29,7 @@ from app.repositories.reports import (
     ReportRawGateEvidence,
 )
 from app.schemas.reports import JsonReportResponse, ReportFiltersResponse, ReportSummaryResponse
-from app.services.reports import ReportFilters, ReportService, ReportSizeLimitError
+from app.services.reports import ReportFilters, ReportService, ReportSizeLimitError, ReportTotals
 
 NOW = datetime(2026, 8, 28, 10, 30, tzinfo=UTC)
 
@@ -184,6 +185,48 @@ def test_hand_calculated_raw_and_effective_truth_reconcile() -> None:
     assert rows["Guest D"].effective_status is EffectiveAttendanceStatus.NOT_ATTENDED
     assert rows["Guest E"].effective_source is EffectiveAttendanceSource.GATE
     assert rows["Guest F"].effective_source is EffectiveAttendanceSource.NONE
+
+
+def test_c21_remaining_people_capacity_is_not_remaining_locked_entitlement() -> None:
+    report = build_report()
+    totals = report.totals
+
+    assert totals.named_holders_invited == 7
+    assert totals.companion_capacity == 7
+    assert totals.maximum_total_people_capacity == 14
+    assert totals.effective_admitted_companions == 4
+    assert totals.effective_total_people_attended == 8
+    assert totals.remaining_people_capacity == (
+        totals.maximum_total_people_capacity - totals.effective_total_people_attended
+    )
+    assert totals.remaining_people_capacity == 6
+
+    attended_rows = [
+        row
+        for row in report.attendance_roster
+        if row.effective_status is EffectiveAttendanceStatus.ATTENDED
+    ]
+    invitation_allowance_minus_admitted = sum(
+        row.allowed_companions - row.effective_admitted_companions for row in attended_rows
+    )
+    assert invitation_allowance_minus_admitted == 0
+    assert totals.remaining_people_capacity != invitation_allowance_minus_admitted
+
+
+@pytest.mark.parametrize(
+    "future_field",
+    [
+        "declared_companion_expectation",
+        "remaining_locked_companion_slots",
+        "released_companion_allowance",
+    ],
+)
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: reports expose locked companion entitlement metrics",
+)
+def test_c21_target_report_exposes_entitlement_metric(future_field: str) -> None:
+    assert future_field in {field.name for field in fields(ReportTotals)}
 
 
 def test_filters_are_exact_null_safe_and_do_not_change_event_totals() -> None:

@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.db.base import Base
 from app.models.attendance import (
     AttendancePersistenceError as ModelPersistenceError,
 )
@@ -19,12 +20,13 @@ from app.models.event import Event, EventStatus
 from app.models.guest import Guest, GuestStatus
 from app.models.qr import GuestQrCredential, QrCredentialStatus
 from app.qr.credentials import generate_qr_credential, hash_qr_credential
+from app.schemas.attendance import GateScanRequest, GateScanResponse
 from app.services.attendance import AttendanceRequestError, AttendanceService
 
 NOW = datetime(2026, 8, 21, 10, 0, tzinfo=UTC)
 
 
-def make_event(*, maximum: int = 2) -> Event:
+def make_event(*, maximum: int = 2, status: EventStatus = EventStatus.ACTIVE) -> Event:
     return Event(
         id=uuid4(),
         event_name="Synthetic M7 Wedding",
@@ -32,7 +34,7 @@ def make_event(*, maximum: int = 2) -> Event:
         groom_name="Baraka",
         event_datetime=NOW,
         venue="Synthetic Hall",
-        status=EventStatus.ACTIVE,
+        status=status,
         max_companions_per_invitation=maximum,
         created_by=uuid4(),
         created_at=NOW,
@@ -161,8 +163,9 @@ def build_service(
     guest_status=GuestStatus.ACTIVE,
     guest_allowance: int = 2,
     event_maximum: int = 2,
+    event_status: EventStatus = EventStatus.ACTIVE,
 ) -> tuple[AttendanceService, FakeAttendanceRepository, Event, Guest, GuestQrCredential, str]:
-    event = make_event(maximum=event_maximum)
+    event = make_event(maximum=event_maximum, status=event_status)
     guest = make_guest(event.id, allowed=guest_allowance, status=guest_status)
     raw = generate_qr_credential()
     credential = make_credential(event.id, guest.id, raw, status=credential_status)
@@ -348,3 +351,337 @@ def test_orm_rejects_updates_and_deletes_to_m7_evidence() -> None:
     attempt.requested_companions = 0
     with pytest.raises(ModelPersistenceError):
         _reject_attempt_update(None, None, attempt)
+
+
+@pytest.mark.parametrize(
+    ("allowed", "requested"),
+    [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1), (2, 2)],
+    ids=[
+        "allowed_0_enter_0",
+        "allowed_1_enter_0",
+        "allowed_1_enter_1",
+        "allowed_2_enter_0",
+        "allowed_2_enter_1",
+        "allowed_2_enter_2",
+    ],
+)
+def test_c21_current_first_scan_companion_matrix(allowed: int, requested: int) -> None:
+    service, repository, event, guest, _, raw = build_service(guest_allowance=allowed)
+
+    result = service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=requested,
+        administrator_id=event.created_by,
+    )
+
+    attendance = repository.attendance[(event.id, guest.id)]
+    assert result.outcome is GateScanOutcome.ADMITTED
+    assert result.companions_admitted == requested
+    assert attendance.companions_admitted == requested
+    assert len(repository.attendance) == 1
+    assert len(repository.attempts) == 1
+
+
+def test_c21_current_state_loses_declaration_when_primary_enters_alone() -> None:
+    persisted_states: dict[int, tuple[int, int, int]] = {}
+    for intended_total in (0, 2):
+        service, repository, event, guest, _, raw = build_service(guest_allowance=2)
+        service.scan(
+            event_id=event.id,
+            presented_credential=raw,
+            companions_admitted=0,
+            administrator_id=event.created_by,
+        )
+        attendance = repository.attendance[(event.id, guest.id)]
+        persisted_states[intended_total] = (
+            guest.allowed_companions,
+            attendance.companions_admitted,
+            attendance.admitted_party_size,
+        )
+
+    assert persisted_states[0] == persisted_states[2] == (2, 0, 1)
+    assert "declared_companions" not in GuestAttendanceRecord.__table__.columns
+
+
+def test_c21_current_later_companion_arrival_is_rejected_as_already_checked_in() -> None:
+    service, repository, event, guest, _, raw = build_service(guest_allowance=2)
+    first = service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=0,
+        administrator_id=event.created_by,
+    )
+    later = service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=1,
+        administrator_id=event.created_by,
+    )
+
+    attendance = repository.attendance[(event.id, guest.id)]
+    assert first.outcome is GateScanOutcome.ADMITTED
+    assert later.outcome is GateScanOutcome.ALREADY_CHECKED_IN
+    assert later.attendance_id == first.attendance_id
+    assert attendance.companions_admitted == 0
+    assert len(repository.attendance) == 1
+
+
+def test_c21_current_repeated_primary_preserves_exactly_one_attendance() -> None:
+    service, repository, event, guest, _, raw = build_service()
+    outcomes = [
+        service.scan(
+            event_id=event.id,
+            presented_credential=raw,
+            companions_admitted=0,
+            administrator_id=event.created_by,
+        ).outcome
+        for _ in range(2)
+    ]
+
+    assert outcomes == [GateScanOutcome.ADMITTED, GateScanOutcome.ALREADY_CHECKED_IN]
+    assert list(repository.attendance) == [(event.id, guest.id)]
+
+
+@pytest.mark.parametrize("status", list(EventStatus), ids=lambda status: status.value)
+def test_c21_current_scan_ignores_event_lifecycle_status(status: EventStatus) -> None:
+    service, repository, event, guest, _, raw = build_service(event_status=status)
+
+    result = service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=0,
+        administrator_id=event.created_by,
+    )
+
+    assert result.outcome is GateScanOutcome.ADMITTED
+    assert (event.id, guest.id) in repository.attendance
+
+
+def test_c21_current_qr_regeneration_does_not_reset_guest_attendance() -> None:
+    service, repository, event, guest, first_credential, first_raw = build_service()
+    first = service.scan(
+        event_id=event.id,
+        presented_credential=first_raw,
+        companions_admitted=1,
+        administrator_id=event.created_by,
+    )
+    regenerated_raw = generate_qr_credential()
+    regenerated = make_credential(event.id, guest.id, regenerated_raw)
+    first_credential.status = QrCredentialStatus.SUPERSEDED
+    first_credential.superseded_at = NOW
+    repository.credentials[regenerated.token_hash] = (regenerated, guest)
+
+    repeated = service.scan(
+        event_id=event.id,
+        presented_credential=regenerated_raw,
+        companions_admitted=0,
+        administrator_id=event.created_by,
+    )
+
+    attendance = repository.attendance[(event.id, guest.id)]
+    assert repeated.outcome is GateScanOutcome.ALREADY_CHECKED_IN
+    assert repeated.attendance_id == first.attendance_id
+    assert attendance.first_qr_credential_id == first_credential.id
+    assert attendance.companions_admitted == 1
+
+
+def test_c21_current_retries_have_no_request_id_and_create_distinct_attempts() -> None:
+    service, repository, event, _, _, raw = build_service()
+    for _ in range(2):
+        service.scan(
+            event_id=event.id,
+            presented_credential=raw,
+            companions_admitted=0,
+            administrator_id=event.created_by,
+        )
+
+    assert "request_id" not in GateScanRequest.model_fields
+    assert "request_id" not in GateScanAttempt.__table__.columns
+    assert len(repository.attendance) == 1
+    assert len({attempt.id for attempt in repository.attempts}) == 2
+
+
+def test_c21_current_scan_attempt_evidence_field_inventory() -> None:
+    future_fields = {
+        "request_id",
+        "arrival_mode",
+        "requested_declared_companions",
+        "primary_admitted_this_scan",
+        "companions_admitted_this_scan",
+        "declared_companions_after",
+        "companions_admitted_after",
+    }
+
+    assert future_fields.isdisjoint(GateScanAttempt.__table__.columns.keys())
+    assert set(GateScanAttempt.__table__.columns.keys()) == {
+        "id",
+        "event_id",
+        "credential_fingerprint",
+        "guest_id",
+        "qr_credential_id",
+        "attendance_id",
+        "outcome",
+        "requested_companions",
+        "scanned_by",
+        "scanned_at",
+    }
+
+
+def test_c21_current_attendance_is_one_primary_event_per_event_guest() -> None:
+    constraint_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in GuestAttendanceRecord.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+
+    assert ("event_id", "guest_id") in constraint_columns
+    assert "companions_admitted" in GuestAttendanceRecord.__table__.columns
+    assert "declared_companions" not in GuestAttendanceRecord.__table__.columns
+
+
+def _future_entitlement_table():
+    required = {"event_id", "guest_id", "declared_companions", "companions_admitted"}
+    return next(
+        (table for table in Base.metadata.tables.values() if required <= set(table.columns.keys())),
+        None,
+    )
+
+
+def _scan_command_has_arrival_mode() -> bool:
+    return any(
+        "arrival" in field_name and "mode" in field_name
+        for field_name in GateScanRequest.model_fields
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: preserve declared companions independently from admitted companions",
+)
+def test_c21_target_declaration_information_is_preserved() -> None:
+    table = _future_entitlement_table()
+    assert table is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: a later companion arrival consumes remaining declared entitlement",
+)
+def test_c21_target_later_companion_arrival_is_expressible() -> None:
+    assert _scan_command_has_arrival_mode()
+    assert _future_entitlement_table() is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: declared zero keeps a valid invitation distinct from an invalid credential",
+)
+def test_c21_target_declared_zero_returns_no_remaining_entitlement() -> None:
+    assert _scan_command_has_arrival_mode()
+    assert _future_entitlement_table() is not None
+    assert any(
+        "remaining" in name and "companion" in name for name in GateScanResponse.model_fields
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: companion before primary returns PRIMARY_REQUIRED without mutation",
+)
+def test_c21_target_companion_before_primary_is_rejected_distinctly() -> None:
+    assert _scan_command_has_arrival_mode()
+    assert "PRIMARY_REQUIRED" in GateScanOutcome.__members__
+
+
+@pytest.mark.parametrize(
+    "status",
+    [EventStatus.DRAFT, EventStatus.COMPLETED, EventStatus.CANCELLED],
+    ids=lambda status: status.value,
+)
+@pytest.mark.xfail(
+    strict=True, reason="C2 target: only ACTIVE events permit gate admission mutation"
+)
+def test_c21_target_non_active_event_rejects_admission(status: EventStatus) -> None:
+    service, repository, event, _, _, raw = build_service(event_status=status)
+
+    result = service.scan(
+        event_id=event.id,
+        presented_credential=raw,
+        companions_admitted=0,
+        administrator_id=event.created_by,
+    )
+
+    assert result.outcome is not GateScanOutcome.ADMITTED
+    assert repository.attendance == {}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: conflicting first declarations produce one authoritative entitlement state",
+)
+def test_c21_target_conflicting_declarations_have_one_persistence_winner() -> None:
+    table = _future_entitlement_table()
+    assert table is not None
+    unique_column_sets = {
+        frozenset(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert frozenset({"event_id", "guest_id"}) in unique_column_sets
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: concurrent last-slot admission cannot exceed the declared companion count",
+)
+def test_c21_target_last_slot_is_protected_by_persistence_invariant() -> None:
+    table = _future_entitlement_table()
+    assert table is not None
+    check_sql = " ".join(
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == "CheckConstraint"
+    )
+    assert "declared_companions" in check_sql
+    assert "companions_admitted" in check_sql
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: mutation requests carry a persisted idempotency UUID",
+)
+def test_c21_target_scan_mutation_supports_idempotent_replay() -> None:
+    assert "request_id" in GateScanRequest.model_fields
+    assert "request_id" in GateScanAttempt.__table__.columns
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: scan attempts preserve per-command entitlement transition evidence",
+)
+def test_c21_target_scan_attempt_records_entitlement_transition() -> None:
+    required = {
+        "arrival_mode",
+        "requested_declared_companions",
+        "primary_admitted_this_scan",
+        "companions_admitted_this_scan",
+        "declared_companions_after",
+        "companions_admitted_after",
+    }
+    assert required <= set(GateScanAttempt.__table__.columns.keys())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: persist one cumulative entitlement state per event and guest",
+)
+def test_c21_target_entitlement_persistence_is_unique_per_event_guest() -> None:
+    table = _future_entitlement_table()
+    assert table is not None
+    unique_column_sets = {
+        frozenset(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert frozenset({"event_id", "guest_id"}) in unique_column_sets

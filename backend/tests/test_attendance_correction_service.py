@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+from inspect import signature
 from uuid import UUID, uuid4
 
 import pytest
@@ -307,6 +308,68 @@ def test_restore_with_gate_returns_to_original_companion_evidence() -> None:
     assert restored.effective_state.effective_source is EffectiveAttendanceSource.GATE
     assert restored.effective_state.effective_companions_admitted == 2
     assert restored.effective_state.gate_attendance_record_id is not None
+
+
+def test_c21_current_attended_to_attended_companion_change_is_not_supported() -> None:
+    repository = FakeCorrectionRepository(gate_companions=1)
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+    before = repository.snapshots[repository.guest.id].attendance
+
+    with pytest.raises(AttendanceCorrectionConflictError):
+        command(
+            service,
+            repository,
+            AttendanceCorrectionDecision.SET_ATTENDED,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            companions=2,
+        )
+
+    after = repository.snapshots[repository.guest.id].attendance
+    assert after is before
+    assert after is not None
+    assert after.companions_admitted == 1
+    assert repository.corrections == []
+
+
+def _has_declaration_correction_capability() -> bool:
+    has_decision = any(
+        "DECLAR" in member_name for member_name in AttendanceCorrectionDecision.__members__
+    )
+    parameters = signature(AttendanceCorrectionService.record_correction).parameters
+    has_declared_value = any(
+        "declared" in parameter_name and "companion" in parameter_name
+        for parameter_name in parameters
+    )
+    has_persisted_value = any(
+        "declared" in column_name and "companion" in column_name
+        for column_name in GuestAttendanceCorrection.__table__.columns
+    )
+    return has_decision and has_declared_value and has_persisted_value
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: authorized correction can increase declared companions",
+)
+def test_c21_target_authorized_declaration_increase() -> None:
+    assert _has_declaration_correction_capability()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: authorized correction can decrease declaration to admitted floor",
+)
+def test_c21_target_authorized_declaration_decrease() -> None:
+    assert _has_declaration_correction_capability()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C2 target: declaration correction rejects a decrease below admitted companions",
+)
+def test_c21_target_declaration_decrease_below_admitted_is_rejected() -> None:
+    assert _has_declaration_correction_capability()
 
 
 @pytest.mark.parametrize(
