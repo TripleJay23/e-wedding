@@ -50,7 +50,7 @@ def valid_authorization() -> StagingMigrationAuthorizationSettings:
 
 
 def test_repository_currently_has_one_accepted_head() -> None:
-    assert repository_solo_head() == "20260905_0010"
+    assert repository_solo_head() == "20260905_0011"
 
 
 def test_canonical_local_staging_identity_is_explicit(tmp_path: Path) -> None:

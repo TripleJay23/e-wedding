@@ -239,7 +239,12 @@ class GateScanAttempt(Base):
             name="ck_gate_scan_attempts_arrival_mode",
         ),
         CheckConstraint(
-            "(outcome IN ('ADMITTED', 'ALREADY_CHECKED_IN') "
+            "(outcome = 'ADMITTED' AND arrival_mode = 'PRIMARY' "
+            "AND guest_id IS NOT NULL AND qr_credential_id IS NOT NULL "
+            "AND attendance_id IS NOT NULL) OR "
+            "(outcome = 'ADMITTED' AND arrival_mode = 'COMPANION' "
+            "AND guest_id IS NOT NULL AND qr_credential_id IS NOT NULL) OR "
+            "(outcome = 'ALREADY_CHECKED_IN' "
             "AND guest_id IS NOT NULL AND qr_credential_id IS NOT NULL "
             "AND attendance_id IS NOT NULL) OR "
             "(outcome IN ('UNKNOWN_CREDENTIAL', 'WRONG_EVENT') "
