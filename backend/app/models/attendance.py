@@ -38,6 +38,10 @@ class GateScanOutcome(StrEnum):
     SUPERSEDED_CREDENTIAL = "SUPERSEDED_CREDENTIAL"
     INELIGIBLE_GUEST = "INELIGIBLE_GUEST"
     COMPANION_LIMIT_EXCEEDED = "COMPANION_LIMIT_EXCEEDED"
+    PRIMARY_REQUIRED = "PRIMARY_REQUIRED"
+    COMPANION_ENTITLEMENT_EXHAUSTED = "COMPANION_ENTITLEMENT_EXHAUSTED"
+    INSUFFICIENT_COMPANION_SLOTS = "INSUFFICIENT_COMPANION_SLOTS"
+    EVENT_NOT_ACTIVE = "EVENT_NOT_ACTIVE"
 
 
 class GateArrivalMode(StrEnum):
@@ -202,7 +206,9 @@ class GateScanAttempt(Base):
         CheckConstraint(
             "outcome IN ('ADMITTED', 'ALREADY_CHECKED_IN', 'UNKNOWN_CREDENTIAL', "
             "'WRONG_EVENT', 'INACTIVE_CREDENTIAL', 'SUPERSEDED_CREDENTIAL', "
-            "'INELIGIBLE_GUEST', 'COMPANION_LIMIT_EXCEEDED')",
+            "'INELIGIBLE_GUEST', 'COMPANION_LIMIT_EXCEEDED', 'PRIMARY_REQUIRED', "
+            "'COMPANION_ENTITLEMENT_EXHAUSTED', 'INSUFFICIENT_COMPANION_SLOTS', "
+            "'EVENT_NOT_ACTIVE')",
             name="ck_gate_scan_attempts_outcome",
         ),
         CheckConstraint(
@@ -239,9 +245,12 @@ class GateScanAttempt(Base):
             "(outcome IN ('UNKNOWN_CREDENTIAL', 'WRONG_EVENT') "
             "AND guest_id IS NULL AND qr_credential_id IS NULL AND attendance_id IS NULL) OR "
             "(outcome IN ('INACTIVE_CREDENTIAL', 'SUPERSEDED_CREDENTIAL', "
-            "'INELIGIBLE_GUEST', 'COMPANION_LIMIT_EXCEEDED') "
+            "'INELIGIBLE_GUEST', 'COMPANION_LIMIT_EXCEEDED', 'PRIMARY_REQUIRED') "
             "AND guest_id IS NOT NULL AND qr_credential_id IS NOT NULL "
-            "AND attendance_id IS NULL)",
+            "AND attendance_id IS NULL) OR "
+            "(outcome IN ('COMPANION_ENTITLEMENT_EXHAUSTED', "
+            "'INSUFFICIENT_COMPANION_SLOTS', 'EVENT_NOT_ACTIVE') "
+            "AND guest_id IS NOT NULL AND qr_credential_id IS NOT NULL)",
             name="ck_gate_scan_attempts_outcome_references",
         ),
         ForeignKeyConstraint(

@@ -18,7 +18,7 @@ from app.models.attendance import GuestCompanionEntitlement
 
 DISPOSABLE_URL = os.getenv("WEDDING_DISPOSABLE_DATABASE_URL")
 PREVIOUS_HEAD = "20260821_0008"
-CURRENT_HEAD = "20260905_0009"
+CURRENT_HEAD = "20260905_0010"
 pytestmark = [
     pytest.mark.postgresql,
     pytest.mark.skipif(
