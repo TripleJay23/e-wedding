@@ -429,9 +429,10 @@ def test_c24_postgresql_two_step_api_and_stale_inspection_safety(
             session.commit()
 
         with Session(engine, expire_on_commit=False) as session:
-            correction = AttendanceCorrectionService(
+            correction_service = AttendanceCorrectionService(
                 AttendanceCorrectionRepository(session)
-            ).record_correction(
+            )
+            correction_service.record_correction(
                 event_id=selected_event.id,
                 guest_id=correction_guest.id,
                 expected_correction_revision=0,
@@ -442,18 +443,18 @@ def test_c24_postgresql_two_step_api_and_stale_inspection_safety(
                 companions_admitted=0,
                 administrator_id=administrator.id,
             )
-            session.add(
-                GuestCompanionEntitlement(
-                    id=uuid4(),
-                    event_id=selected_event.id,
-                    guest_id=correction_guest.id,
-                    primary_attendance_id=None,
-                    establishing_correction_id=correction.correction.id,
-                    declared_companions=2,
-                    companions_admitted=0,
-                )
+            correction_service.record_correction(
+                event_id=selected_event.id,
+                guest_id=correction_guest.id,
+                expected_correction_revision=1,
+                expected_effective_status=None,
+                decision=AttendanceCorrectionDecision.SET_COMPANION_STATE,
+                reason_code=AttendanceCorrectionReason.OPERATOR_ERROR,
+                reason_note=None,
+                declared_companions=2,
+                companions_admitted=0,
+                administrator_id=administrator.id,
             )
-            session.commit()
 
         initial_inspection, inspection_queries = observe_inspection_sql(
             engine,
@@ -764,9 +765,10 @@ def test_c23_postgresql_both_origins_and_concurrency(
             )
 
         with Session(engine, expire_on_commit=False) as session:
-            correction = AttendanceCorrectionService(
+            correction_service = AttendanceCorrectionService(
                 AttendanceCorrectionRepository(session)
-            ).record_correction(
+            )
+            correction_service.record_correction(
                 event_id=event.id,
                 guest_id=correction_guest.id,
                 expected_correction_revision=0,
@@ -777,18 +779,18 @@ def test_c23_postgresql_both_origins_and_concurrency(
                 companions_admitted=0,
                 administrator_id=administrator.id,
             )
-            session.add(
-                GuestCompanionEntitlement(
-                    id=uuid4(),
-                    event_id=event.id,
-                    guest_id=correction_guest.id,
-                    primary_attendance_id=None,
-                    establishing_correction_id=correction.correction.id,
-                    declared_companions=2,
-                    companions_admitted=0,
-                )
+            correction_service.record_correction(
+                event_id=event.id,
+                guest_id=correction_guest.id,
+                expected_correction_revision=1,
+                expected_effective_status=None,
+                decision=AttendanceCorrectionDecision.SET_COMPANION_STATE,
+                reason_code=AttendanceCorrectionReason.OPERATOR_ERROR,
+                reason_note=None,
+                declared_companions=2,
+                companions_admitted=0,
+                administrator_id=administrator.id,
             )
-            session.commit()
 
         correction_result = admit_once(
             engine,

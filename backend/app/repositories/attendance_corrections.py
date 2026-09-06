@@ -4,10 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.models.attendance import GuestAttendanceRecord
+from app.models.attendance import (
+    GateScanAttempt,
+    GateScanOutcome,
+    GuestAttendanceRecord,
+    GuestCompanionEntitlement,
+)
 from app.models.attendance_corrections import (
     AttendanceCorrectionDecision,
     AttendanceCorrectionReason,
@@ -47,6 +52,10 @@ class CorrectionHead:
     decision: AttendanceCorrectionDecision
     companions_admitted: int | None
     created_at: datetime
+    resulting_effective_status: EffectiveAttendanceStatus | None = None
+    resulting_effective_source: EffectiveAttendanceSource | None = None
+    resulting_declared_companions: int | None = None
+    resulting_companions_admitted: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +63,9 @@ class AttendanceStateSnapshot:
     guest_id: UUID
     attendance: AttendanceEvidence | None
     latest_correction: CorrectionHead | None
+    allowed_companions: int | None = None
+    declared_companions: int | None = None
+    companions_admitted: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,11 +83,15 @@ class CorrectionRecord:
     resulting_effective_status: EffectiveAttendanceStatus
     resulting_effective_source: EffectiveAttendanceSource
     created_at: datetime
+    previous_declared_companions: int | None = None
+    previous_companions_admitted: int | None = None
+    resulting_declared_companions: int | None = None
+    resulting_companions_admitted: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class CorrectionAuditRecord(CorrectionRecord):
-    reason_note: str | None
+    reason_note: str | None = None
 
 
 class AttendanceCorrectionRepository:
@@ -109,6 +125,57 @@ class AttendanceCorrectionRepository:
         if row is None:
             return None
         return GuestCorrectionContext(row.id, row.status, row.allowed_companions)
+
+    def get_entitlement_for_update(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+    ) -> GuestCompanionEntitlement | None:
+        statement = (
+            select(GuestCompanionEntitlement)
+            .where(
+                GuestCompanionEntitlement.event_id == event_id,
+                GuestCompanionEntitlement.guest_id == guest_id,
+            )
+            .with_for_update(of=GuestCompanionEntitlement)
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def get_evidenced_companion_ceiling(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+        *,
+        establishing_correction_id: UUID | None,
+    ) -> int | None:
+        gate_total = self._session.scalar(
+            select(
+                func.coalesce(
+                    func.sum(func.coalesce(GateScanAttempt.companions_admitted_this_scan, 0)),
+                    0,
+                )
+            ).where(
+                GateScanAttempt.event_id == event_id,
+                GateScanAttempt.guest_id == guest_id,
+                GateScanAttempt.outcome == GateScanOutcome.ADMITTED,
+            )
+        )
+        if gate_total is None:
+            return None
+
+        correction_origin = 0
+        if establishing_correction_id is not None:
+            correction_origin = self._session.scalar(
+                select(GuestAttendanceCorrection.companions_admitted).where(
+                    GuestAttendanceCorrection.id == establishing_correction_id,
+                    GuestAttendanceCorrection.event_id == event_id,
+                    GuestAttendanceCorrection.guest_id == guest_id,
+                    GuestAttendanceCorrection.decision == AttendanceCorrectionDecision.SET_ATTENDED,
+                )
+            )
+            if correction_origin is None:
+                return None
+        return int(gate_total) + correction_origin
 
     def event_exists(self, event_id: UUID) -> bool:
         return (
@@ -204,11 +271,18 @@ class AttendanceCorrectionRepository:
             resulting_effective_status=safe.resulting_effective_status,
             resulting_effective_source=safe.resulting_effective_source,
             created_at=safe.created_at,
+            previous_declared_companions=safe.previous_declared_companions,
+            previous_companions_admitted=safe.previous_companions_admitted,
+            resulting_declared_companions=safe.resulting_declared_companions,
+            resulting_companions_admitted=safe.resulting_companions_admitted,
             reason_note=row["reason_note"],
         )
 
     def add(self, correction: GuestAttendanceCorrection) -> None:
         self._session.add(correction)
+
+    def add_entitlement(self, entitlement: GuestCompanionEntitlement) -> None:
+        self._session.add(entitlement)
 
     def flush(self) -> None:
         self._session.flush()
@@ -238,6 +312,7 @@ class AttendanceCorrectionRepository:
         return (
             select(
                 Guest.id.label("guest_id"),
+                Guest.allowed_companions.label("allowed_companions"),
                 GuestAttendanceRecord.id.label("attendance_id"),
                 GuestAttendanceRecord.companions_admitted.label("gate_companions_admitted"),
                 GuestAttendanceRecord.checked_in_at.label("gate_checked_in_at"),
@@ -245,7 +320,25 @@ class AttendanceCorrectionRepository:
                 GuestAttendanceCorrection.revision_number.label("correction_revision"),
                 GuestAttendanceCorrection.decision.label("correction_decision"),
                 GuestAttendanceCorrection.companions_admitted.label("manual_companions_admitted"),
+                GuestAttendanceCorrection.resulting_effective_status.label(
+                    "correction_resulting_status"
+                ),
+                GuestAttendanceCorrection.resulting_effective_source.label(
+                    "correction_resulting_source"
+                ),
+                GuestAttendanceCorrection.resulting_declared_companions.label(
+                    "correction_resulting_declared"
+                ),
+                GuestAttendanceCorrection.resulting_companions_admitted.label(
+                    "correction_resulting_admitted"
+                ),
                 GuestAttendanceCorrection.created_at.label("correction_created_at"),
+                GuestCompanionEntitlement.declared_companions.label(
+                    "entitlement_declared_companions"
+                ),
+                GuestCompanionEntitlement.companions_admitted.label(
+                    "entitlement_companions_admitted"
+                ),
             )
             .select_from(Guest)
             .outerjoin(
@@ -257,6 +350,13 @@ class AttendanceCorrectionRepository:
             )
             .outerjoin(
                 GuestAttendanceCorrection, GuestAttendanceCorrection.id == latest_correction_id
+            )
+            .outerjoin(
+                GuestCompanionEntitlement,
+                and_(
+                    GuestCompanionEntitlement.guest_id == Guest.id,
+                    GuestCompanionEntitlement.event_id == Guest.event_id,
+                ),
             )
             .where(Guest.event_id == event_id)
         )
@@ -278,11 +378,18 @@ class AttendanceCorrectionRepository:
                 decision=row["correction_decision"],
                 companions_admitted=row["manual_companions_admitted"],
                 created_at=row["correction_created_at"],
+                resulting_effective_status=row["correction_resulting_status"],
+                resulting_effective_source=row["correction_resulting_source"],
+                resulting_declared_companions=row["correction_resulting_declared"],
+                resulting_companions_admitted=row["correction_resulting_admitted"],
             )
         return AttendanceStateSnapshot(
             guest_id=row["guest_id"],
             attendance=attendance,
             latest_correction=correction,
+            allowed_companions=row["allowed_companions"],
+            declared_companions=row["entitlement_declared_companions"],
+            companions_admitted=row["entitlement_companions_admitted"],
         )
 
     @staticmethod
@@ -301,6 +408,10 @@ class AttendanceCorrectionRepository:
             GuestAttendanceCorrection.resulting_effective_status,
             GuestAttendanceCorrection.resulting_effective_source,
             GuestAttendanceCorrection.created_at,
+            GuestAttendanceCorrection.previous_declared_companions,
+            GuestAttendanceCorrection.previous_companions_admitted,
+            GuestAttendanceCorrection.resulting_declared_companions,
+            GuestAttendanceCorrection.resulting_companions_admitted,
         )
 
     @staticmethod
@@ -319,4 +430,8 @@ class AttendanceCorrectionRepository:
             resulting_effective_status=row["resulting_effective_status"],
             resulting_effective_source=row["resulting_effective_source"],
             created_at=row["created_at"],
+            previous_declared_companions=row["previous_declared_companions"],
+            previous_companions_admitted=row["previous_companions_admitted"],
+            resulting_declared_companions=row["resulting_declared_companions"],
+            resulting_companions_admitted=row["resulting_companions_admitted"],
         )

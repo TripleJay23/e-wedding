@@ -6,7 +6,9 @@ from inspect import signature
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.models.attendance import GuestCompanionEntitlement
 from app.models.attendance_corrections import (
     AttendanceCorrectionDecision,
     AttendanceCorrectionReason,
@@ -33,6 +35,7 @@ from app.repositories.attendance_corrections import (
 )
 from app.services.attendance_corrections import (
     AttendanceCorrectionConflictError,
+    AttendanceCorrectionPersistenceError,
     AttendanceCorrectionRequestError,
     AttendanceCorrectionResourceNotFoundError,
     AttendanceCorrectionService,
@@ -65,8 +68,21 @@ class FakeCorrectionRepository:
             None if gate_companions is None else AttendanceEvidence(uuid4(), gate_companions, NOW)
         )
         self.snapshots = {self.guest.id: AttendanceStateSnapshot(self.guest.id, attendance, None)}
+        self.entitlements: dict[UUID, GuestCompanionEntitlement] = {}
+        if attendance is not None:
+            self.entitlements[self.guest.id] = GuestCompanionEntitlement(
+                id=uuid4(),
+                event_id=self.event.id,
+                guest_id=self.guest.id,
+                primary_attendance_id=attendance.id,
+                establishing_correction_id=None,
+                declared_companions=gate_companions,
+                companions_admitted=gate_companions,
+            )
+        self.gate_evidence = 0 if gate_companions is None else gate_companions
         self.corrections: list[GuestAttendanceCorrection] = []
         self.pending: GuestAttendanceCorrection | None = None
+        self.pending_recorded = False
         self.commits = 0
         self.rollbacks = 0
 
@@ -78,6 +94,36 @@ class FakeCorrectionRepository:
             return self.guest
         return None
 
+    def get_entitlement_for_update(self, event_id: UUID, guest_id: UUID):
+        if event_id != self.event.id:
+            return None
+        return self.entitlements.get(guest_id)
+
+    def get_evidenced_companion_ceiling(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+        *,
+        establishing_correction_id: UUID | None,
+    ) -> int | None:
+        if event_id != self.event.id or guest_id != self.guest.id:
+            return None
+        correction_origin = 0
+        if establishing_correction_id is not None:
+            correction = next(
+                (
+                    item
+                    for item in self.corrections
+                    if item.id == establishing_correction_id
+                    and item.decision is AttendanceCorrectionDecision.SET_ATTENDED
+                ),
+                None,
+            )
+            if correction is None or correction.companions_admitted is None:
+                return None
+            correction_origin = correction.companions_admitted
+        return self.gate_evidence + correction_origin
+
     def event_exists(self, event_id: UUID) -> bool:
         return event_id == self.event.id
 
@@ -85,7 +131,20 @@ class FakeCorrectionRepository:
         return event_id == self.event.id and guest_id in self.snapshots
 
     def get_state_snapshot(self, event_id: UUID, guest_id: UUID):
-        return self.snapshots.get(guest_id) if event_id == self.event.id else None
+        if event_id != self.event.id:
+            return None
+        snapshot = self.snapshots.get(guest_id)
+        if snapshot is None:
+            return None
+        entitlement = self.entitlements.get(guest_id)
+        return AttendanceStateSnapshot(
+            guest_id=snapshot.guest_id,
+            attendance=snapshot.attendance,
+            latest_correction=snapshot.latest_correction,
+            allowed_companions=self.guest.allowed_companions,
+            declared_companions=(None if entitlement is None else entitlement.declared_companions),
+            companions_admitted=(None if entitlement is None else entitlement.companions_admitted),
+        )
 
     def list_event_state_snapshots(self, event_id: UUID, *, limit: int, offset: int):
         if event_id != self.event.id:
@@ -116,31 +175,42 @@ class FakeCorrectionRepository:
 
     def add(self, correction: GuestAttendanceCorrection) -> None:
         self.pending = correction
+        self.pending_recorded = False
+
+    def add_entitlement(self, entitlement: GuestCompanionEntitlement) -> None:
+        self.entitlements[entitlement.guest_id] = entitlement
 
     def flush(self) -> None:
-        assert self.pending is not None
-        self.pending.created_at = NOW
-        self.corrections.append(self.pending)
-        current = self.snapshots[self.pending.guest_id]
-        self.snapshots[self.pending.guest_id] = AttendanceStateSnapshot(
-            guest_id=current.guest_id,
-            attendance=current.attendance,
-            latest_correction=CorrectionHead(
-                id=self.pending.id,
-                revision_number=self.pending.revision_number,
-                decision=self.pending.decision,
-                companions_admitted=self.pending.companions_admitted,
-                created_at=NOW,
-            ),
-        )
+        if self.pending is not None and not self.pending_recorded:
+            self.pending.created_at = NOW
+            self.corrections.append(self.pending)
+            current = self.snapshots[self.pending.guest_id]
+            self.snapshots[self.pending.guest_id] = AttendanceStateSnapshot(
+                guest_id=current.guest_id,
+                attendance=current.attendance,
+                latest_correction=CorrectionHead(
+                    id=self.pending.id,
+                    revision_number=self.pending.revision_number,
+                    decision=self.pending.decision,
+                    companions_admitted=self.pending.companions_admitted,
+                    created_at=NOW,
+                    resulting_effective_status=self.pending.resulting_effective_status,
+                    resulting_effective_source=self.pending.resulting_effective_source,
+                    resulting_declared_companions=(self.pending.resulting_declared_companions),
+                    resulting_companions_admitted=(self.pending.resulting_companions_admitted),
+                ),
+            )
+            self.pending_recorded = True
 
     def commit(self) -> None:
         self.commits += 1
         self.pending = None
+        self.pending_recorded = False
 
     def rollback(self) -> None:
         self.rollbacks += 1
         self.pending = None
+        self.pending_recorded = False
 
     @staticmethod
     def _record(item: GuestAttendanceCorrection) -> CorrectionRecord:
@@ -158,7 +228,45 @@ class FakeCorrectionRepository:
             resulting_effective_status=item.resulting_effective_status,
             resulting_effective_source=item.resulting_effective_source,
             created_at=item.created_at,
+            previous_declared_companions=item.previous_declared_companions,
+            previous_companions_admitted=item.previous_companions_admitted,
+            resulting_declared_companions=item.resulting_declared_companions,
+            resulting_companions_admitted=item.resulting_companions_admitted,
         )
+
+
+class FailingFlushCorrectionRepository(FakeCorrectionRepository):
+    def __init__(self, *, fail_on_flush: int) -> None:
+        super().__init__(gate_companions=1)
+        entitlement = self.entitlements[self.guest.id]
+        entitlement.declared_companions = 2
+        self.fail_on_flush = fail_on_flush
+        self.flush_calls = 0
+        self.original_entitlement = (
+            entitlement.declared_companions,
+            entitlement.companions_admitted,
+        )
+
+    def flush(self) -> None:
+        self.flush_calls += 1
+        if self.flush_calls == self.fail_on_flush:
+            raise SQLAlchemyError("synthetic persistence failure")
+        super().flush()
+
+    def rollback(self) -> None:
+        entitlement = self.entitlements[self.guest.id]
+        (
+            entitlement.declared_companions,
+            entitlement.companions_admitted,
+        ) = self.original_entitlement
+        self.corrections.clear()
+        snapshot = self.snapshots[self.guest.id]
+        self.snapshots[self.guest.id] = AttendanceStateSnapshot(
+            guest_id=snapshot.guest_id,
+            attendance=snapshot.attendance,
+            latest_correction=None,
+        )
+        super().rollback()
 
 
 def command(
@@ -169,6 +277,7 @@ def command(
     revision: int,
     status: EffectiveAttendanceStatus,
     companions: int | None = None,
+    declared: int | None = None,
     reason: AttendanceCorrectionReason = AttendanceCorrectionReason.OPERATOR_ERROR,
     note: str | None = None,
 ):
@@ -182,6 +291,7 @@ def command(
         reason_note=note,
         companions_admitted=companions,
         administrator_id=uuid4(),
+        declared_companions=declared,
     )
 
 
@@ -333,43 +443,185 @@ def test_c21_current_attended_to_attended_companion_change_is_not_supported() ->
 
 
 def _has_declaration_correction_capability() -> bool:
-    has_decision = any(
-        "DECLAR" in member_name for member_name in AttendanceCorrectionDecision.__members__
-    )
+    has_decision = "SET_COMPANION_STATE" in AttendanceCorrectionDecision.__members__
     parameters = signature(AttendanceCorrectionService.record_correction).parameters
     has_declared_value = any(
         "declared" in parameter_name and "companion" in parameter_name
         for parameter_name in parameters
     )
     has_persisted_value = any(
-        "declared" in column_name and "companion" in column_name
-        for column_name in GuestAttendanceCorrection.__table__.columns
+        "declared" in column.name and "companion" in column.name
+        for column in GuestAttendanceCorrection.__table__.columns
     )
     return has_decision and has_declared_value and has_persisted_value
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: authorized correction can increase declared companions",
-)
 def test_c21_target_authorized_declaration_increase() -> None:
+    repository = FakeCorrectionRepository()
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+    command(
+        service,
+        repository,
+        AttendanceCorrectionDecision.SET_ATTENDED,
+        revision=0,
+        status=EffectiveAttendanceStatus.NOT_ATTENDED,
+        companions=0,
+    )
+
+    result = command(
+        service,
+        repository,
+        AttendanceCorrectionDecision.SET_COMPANION_STATE,
+        revision=1,
+        status=EffectiveAttendanceStatus.ATTENDED,
+        declared=2,
+        companions=0,
+    )
+
     assert _has_declaration_correction_capability()
+    assert result.correction.previous_declared_companions == 0
+    assert result.correction.resulting_declared_companions == 2
+    assert result.effective_state.remaining_companion_slots == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: authorized correction can decrease declaration to admitted floor",
-)
 def test_c21_target_authorized_declaration_decrease() -> None:
+    repository = FakeCorrectionRepository(gate_companions=1)
+    entitlement = repository.entitlements[repository.guest.id]
+    entitlement.declared_companions = 2
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+
+    result = command(
+        service,
+        repository,
+        AttendanceCorrectionDecision.SET_COMPANION_STATE,
+        revision=0,
+        status=EffectiveAttendanceStatus.ATTENDED,
+        declared=1,
+        companions=1,
+    )
+
     assert _has_declaration_correction_capability()
+    assert result.effective_state.declared_companions == 1
+    assert result.effective_state.companions_admitted == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: declaration correction rejects a decrease below admitted companions",
-)
 def test_c21_target_declaration_decrease_below_admitted_is_rejected() -> None:
-    assert _has_declaration_correction_capability()
+    repository = FakeCorrectionRepository(gate_companions=1)
+    entitlement = repository.entitlements[repository.guest.id]
+    entitlement.declared_companions = 2
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(AttendanceCorrectionConflictError):
+        command(
+            service,
+            repository,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            declared=0,
+            companions=1,
+        )
+
+    assert entitlement.declared_companions == 2
+    assert entitlement.companions_admitted == 1
+    assert repository.corrections == []
+
+
+def test_companion_correction_rejects_noop_missing_entitlement_and_unevidenced_increase() -> None:
+    no_op_repository = FakeCorrectionRepository(gate_companions=1)
+    no_op_service = AttendanceCorrectionService(no_op_repository)  # type: ignore[arg-type]
+    with pytest.raises(AttendanceCorrectionConflictError):
+        command(
+            no_op_service,
+            no_op_repository,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            declared=1,
+            companions=1,
+        )
+
+    with pytest.raises(AttendanceCorrectionConflictError):
+        command(
+            no_op_service,
+            no_op_repository,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            declared=2,
+            companions=2,
+        )
+
+    missing_repository = FakeCorrectionRepository(gate_companions=1)
+    missing_repository.entitlements.clear()
+    missing_service = AttendanceCorrectionService(missing_repository)  # type: ignore[arg-type]
+    with pytest.raises(AttendanceCorrectionConflictError):
+        command(
+            missing_service,
+            missing_repository,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            declared=2,
+            companions=1,
+        )
+
+    assert no_op_repository.corrections == []
+    assert missing_repository.corrections == []
+
+
+def test_companion_correction_can_reduce_then_restore_to_immutable_evidence() -> None:
+    repository = FakeCorrectionRepository(gate_companions=2)
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+
+    reduced = command(
+        service,
+        repository,
+        AttendanceCorrectionDecision.SET_COMPANION_STATE,
+        revision=0,
+        status=EffectiveAttendanceStatus.ATTENDED,
+        declared=1,
+        companions=1,
+    )
+    restored = command(
+        service,
+        repository,
+        AttendanceCorrectionDecision.SET_COMPANION_STATE,
+        revision=1,
+        status=EffectiveAttendanceStatus.ATTENDED,
+        declared=2,
+        companions=2,
+    )
+
+    assert reduced.correction.previous_companions_admitted == 2
+    assert restored.correction.previous_companions_admitted == 1
+    assert restored.effective_state.companions_admitted == 2
+    assert [item.revision_number for item in repository.corrections] == [1, 2]
+
+
+@pytest.mark.parametrize("fail_on_flush", [1, 2])
+def test_companion_correction_rolls_back_audit_and_entitlement_together(
+    fail_on_flush: int,
+) -> None:
+    repository = FailingFlushCorrectionRepository(fail_on_flush=fail_on_flush)
+    service = AttendanceCorrectionService(repository)  # type: ignore[arg-type]
+
+    with pytest.raises(AttendanceCorrectionPersistenceError):
+        command(
+            service,
+            repository,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+            revision=0,
+            status=EffectiveAttendanceStatus.ATTENDED,
+            declared=1,
+            companions=1,
+        )
+
+    entitlement = repository.entitlements[repository.guest.id]
+    assert (entitlement.declared_companions, entitlement.companions_admitted) == (2, 1)
+    assert repository.corrections == []
+    assert repository.commits == 0
+    assert repository.rollbacks == 1
 
 
 @pytest.mark.parametrize(

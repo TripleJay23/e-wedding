@@ -201,6 +201,7 @@ def record_attendance_correction(
             reason_note=payload.reason_note,
             companions_admitted=payload.companions_admitted,
             administrator_id=administrator.id,
+            declared_companions=payload.declared_companions,
         )
     except (
         AttendanceCorrectionResourceNotFoundError,

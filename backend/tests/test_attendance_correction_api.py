@@ -72,6 +72,10 @@ class FakeCorrectionService:
             current_correction_id=self.correction_id,
             correction_revision=1,
             effective_at=NOW,
+            allowed_companions=2,
+            declared_companions=2,
+            companions_admitted=1,
+            remaining_companion_slots=1,
         )
 
     def correction(self) -> CorrectionRecord:
@@ -208,6 +212,52 @@ def test_record_route_is_strict_private_and_returns_no_sensitive_note(developmen
     assert call["reason_note"] == SENSITIVE_NOTE
 
 
+def test_set_companion_state_accepts_only_desired_state_and_returns_current_state(
+    development_settings,
+) -> None:
+    app, service, _ = build_app(development_settings)
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            f"/api/v1/events/{service.event_id}/attendance/guests/{service.guest_id}/corrections",
+            json={
+                "expected_correction_revision": 0,
+                "decision": "SET_COMPANION_STATE",
+                "reason_code": "OPERATOR_ERROR",
+                "declared_companions": 2,
+                "companions_admitted": 1,
+            },
+        )
+    )
+
+    assert response.status_code == 201
+    state = response.json()["effective_state"]
+    assert {
+        "primary_attended": True,
+        "allowed_companions": 2,
+        "declared_companions": 2,
+        "companions_admitted": 1,
+        "remaining_companion_slots": 1,
+    }.items() <= state.items()
+    call = service.calls[0][1]
+    assert call["expected_effective_status"] is None
+    assert call["declared_companions"] == 2
+    assert call["companions_admitted"] == 1
+    assert "previous_declared_companions" not in call
+    assert "previous_companions_admitted" not in call
+
+    request_schema = app.openapi()["components"]["schemas"]["AttendanceCorrectionRequest"]
+    properties = request_schema["properties"]
+    assert (
+        "optional for SET_COMPANION_STATE" in properties["expected_effective_status"]["description"]
+    )
+    assert "Required for SET_COMPANION_STATE" in properties["declared_companions"]["description"]
+    assert (
+        "SET_ATTENDED and SET_COMPANION_STATE" in properties["companions_admitted"]["description"]
+    )
+
+
 def test_all_read_routes_are_bounded_and_only_audit_detail_returns_note(
     development_settings,
 ) -> None:
@@ -259,7 +309,37 @@ def test_all_read_routes_are_bounded_and_only_audit_detail_returns_note(
         valid_payload(reason_code="UNBOUNDED"),
         valid_payload(companions_admitted=3),
         valid_payload(decision="SET_ATTENDED", companions_admitted=None),
+        valid_payload(decision="SET_ATTENDED", declared_companions=1),
         valid_payload(decision="SET_NOT_ATTENDED", companions_admitted=0),
+        {
+            "expected_correction_revision": 0,
+            "decision": "SET_NOT_ATTENDED",
+            "reason_code": "OPERATOR_ERROR",
+        },
+        {
+            "expected_correction_revision": 0,
+            "decision": "SET_COMPANION_STATE",
+            "reason_code": "OPERATOR_ERROR",
+            "companions_admitted": 0,
+        },
+        {
+            "expected_correction_revision": 0,
+            "decision": "SET_COMPANION_STATE",
+            "reason_code": "OPERATOR_ERROR",
+            "declared_companions": 2,
+        },
+        {
+            "expected_correction_revision": 0,
+            "decision": "SET_COMPANION_STATE",
+            "reason_code": "OPERATOR_ERROR",
+            "declared_companions": 0,
+            "companions_admitted": 1,
+        },
+        valid_payload(
+            decision="RESTORE_GATE_DERIVED",
+            companions_admitted=None,
+            declared_companions=0,
+        ),
         valid_payload(reason_code="OTHER", reason_note=None),
         valid_payload(reason_note="x" * 2001),
         valid_payload(resulting_effective_status="ATTENDED"),

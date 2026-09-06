@@ -785,7 +785,7 @@ def test_m8_postgresql_api_integrity_concurrency_queries_and_timings(
         assert query_counts["single_effective"] == 1
         assert query_counts["small_event_list"] == query_counts["large_event_list"] == 2
         assert query_counts["history"] == 2
-        assert query_counts["command"] <= 4
+        assert query_counts["command"] <= 6
         assert len(list_effective_once(engine, event_id=large_event.id, limit=100)) == 100
 
         old_time = datetime(2000, 1, 1, tzinfo=UTC)

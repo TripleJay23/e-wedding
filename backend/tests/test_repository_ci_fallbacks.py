@@ -172,6 +172,10 @@ def _correction_row(*, include_evidence: bool = True) -> dict[str, Any]:
         "previous_effective_status": EffectiveAttendanceStatus.NOT_ATTENDED,
         "resulting_effective_status": EffectiveAttendanceStatus.ATTENDED,
         "resulting_effective_source": EffectiveAttendanceSource.MANUAL,
+        "previous_declared_companions": None,
+        "previous_companions_admitted": None,
+        "resulting_declared_companions": None,
+        "resulting_companions_admitted": None,
         "created_at": now,
         "reason_note": "synthetic audit note",
         "attendance_id": uuid4() if include_evidence else None,
@@ -181,7 +185,14 @@ def _correction_row(*, include_evidence: bool = True) -> dict[str, Any]:
         "correction_revision": 1,
         "correction_decision": AttendanceCorrectionDecision.SET_ATTENDED,
         "manual_companions_admitted": 1,
+        "correction_resulting_status": EffectiveAttendanceStatus.ATTENDED,
+        "correction_resulting_source": EffectiveAttendanceSource.MANUAL,
+        "correction_resulting_declared": None,
+        "correction_resulting_admitted": None,
         "correction_created_at": now,
+        "allowed_companions": 2,
+        "entitlement_declared_companions": 1,
+        "entitlement_companions_admitted": 1,
     }
 
 

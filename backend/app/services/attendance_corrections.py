@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.models.attendance import GuestCompanionEntitlement
 from app.models.attendance_corrections import (
     AttendanceCorrectionDecision,
     AttendanceCorrectionReason,
@@ -60,6 +61,14 @@ class EffectiveAttendanceState:
     current_correction_id: UUID | None
     correction_revision: int
     effective_at: datetime | None
+    allowed_companions: int | None = None
+    declared_companions: int | None = None
+    companions_admitted: int | None = None
+    remaining_companion_slots: int | None = None
+
+    @property
+    def primary_attended(self) -> bool:
+        return self.effective_status is EffectiveAttendanceStatus.ATTENDED
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,62 @@ def derive_effective_attendance_state(
     correction = snapshot.latest_correction
     correction_id = None if correction is None else correction.id
     revision = 0 if correction is None else correction.revision_number
+    declared = snapshot.declared_companions
+    admitted = snapshot.companions_admitted
+    remaining = None if declared is None or admitted is None else declared - admitted
+
+    if (
+        correction is not None
+        and correction.decision is AttendanceCorrectionDecision.SET_COMPANION_STATE
+    ):
+        companion_state = (
+            correction.resulting_declared_companions,
+            correction.resulting_companions_admitted,
+        )
+        if (
+            correction.resulting_effective_status is None
+            or correction.resulting_effective_source is None
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) for value in companion_state
+            )
+        ):
+            raise AttendanceCorrectionPersistenceError(
+                "attendance correction history is inconsistent"
+            )
+        corrected_declared, corrected_admitted = companion_state
+        current_declared = corrected_declared if declared is None else declared
+        current_admitted = corrected_admitted if admitted is None else admitted
+        if (
+            not 0 <= corrected_admitted <= corrected_declared <= MAX_COMPANIONS_PER_INVITATION
+            or not 0 <= current_admitted <= current_declared <= MAX_COMPANIONS_PER_INVITATION
+        ):
+            raise AttendanceCorrectionPersistenceError(
+                "attendance correction history is inconsistent"
+            )
+        return EffectiveAttendanceState(
+            event_id=event_id,
+            guest_id=snapshot.guest_id,
+            effective_status=correction.resulting_effective_status,
+            effective_source=correction.resulting_effective_source,
+            effective_companions_admitted=(
+                current_admitted
+                if correction.resulting_effective_status is EffectiveAttendanceStatus.ATTENDED
+                else 0
+            ),
+            effective_party_size=(
+                1 + current_admitted
+                if correction.resulting_effective_status is EffectiveAttendanceStatus.ATTENDED
+                else 0
+            ),
+            gate_attendance_record_id=None if attendance is None else attendance.id,
+            current_correction_id=correction_id,
+            correction_revision=revision,
+            effective_at=correction.created_at,
+            allowed_companions=snapshot.allowed_companions,
+            declared_companions=current_declared,
+            companions_admitted=current_admitted,
+            remaining_companion_slots=current_declared - current_admitted,
+        )
 
     if correction is not None and correction.decision in {
         AttendanceCorrectionDecision.SET_ATTENDED,
@@ -109,20 +174,29 @@ def derive_effective_attendance_state(
             current_correction_id=correction_id,
             correction_revision=revision,
             effective_at=correction.created_at,
+            allowed_companions=snapshot.allowed_companions,
+            declared_companions=declared,
+            companions_admitted=admitted,
+            remaining_companion_slots=remaining,
         )
 
     if attendance is not None:
+        effective_companions = attendance.companions_admitted if admitted is None else admitted
         return EffectiveAttendanceState(
             event_id=event_id,
             guest_id=snapshot.guest_id,
             effective_status=EffectiveAttendanceStatus.ATTENDED,
             effective_source=EffectiveAttendanceSource.GATE,
-            effective_companions_admitted=attendance.companions_admitted,
-            effective_party_size=1 + attendance.companions_admitted,
+            effective_companions_admitted=effective_companions,
+            effective_party_size=1 + effective_companions,
             gate_attendance_record_id=attendance.id,
             current_correction_id=correction_id,
             correction_revision=revision,
             effective_at=attendance.checked_in_at,
+            allowed_companions=snapshot.allowed_companions,
+            declared_companions=declared,
+            companions_admitted=admitted,
+            remaining_companion_slots=remaining,
         )
 
     return EffectiveAttendanceState(
@@ -136,6 +210,10 @@ def derive_effective_attendance_state(
         current_correction_id=correction_id,
         correction_revision=revision,
         effective_at=None,
+        allowed_companions=snapshot.allowed_companions,
+        declared_companions=declared,
+        companions_admitted=admitted,
+        remaining_companion_slots=remaining,
     )
 
 
@@ -151,26 +229,40 @@ class AttendanceCorrectionService:
         event_id: UUID,
         guest_id: UUID,
         expected_correction_revision: int,
-        expected_effective_status: EffectiveAttendanceStatus,
+        expected_effective_status: EffectiveAttendanceStatus | None,
         decision: AttendanceCorrectionDecision,
         reason_code: AttendanceCorrectionReason,
         reason_note: str | None,
         companions_admitted: int | None,
         administrator_id: UUID,
+        declared_companions: int | None = None,
     ) -> AttendanceCorrectionResult:
         """Append one decision after locking only its event-shared and guest-exclusive rows."""
 
         expected_revision = self._validate_expected_revision(expected_correction_revision)
-        expected_status = self._validate_expected_status(expected_effective_status)
         validated_decision = self._validate_decision(decision)
+        expected_status = self._validate_expected_status(
+            expected_effective_status,
+            validated_decision,
+        )
         validated_reason = self._validate_reason(reason_code)
         normalized_note = self._validate_note(reason_note, validated_reason)
+        validated_declared = self._validate_declared_companions(
+            declared_companions,
+            validated_decision,
+        )
         validated_companions = self._validate_companions(
             companions_admitted,
             validated_decision,
         )
 
         try:
+            guest = self._repository.get_guest_for_update(event_id, guest_id)
+            if guest is None:
+                raise AttendanceCorrectionResourceNotFoundError(
+                    "attendance correction resource not found"
+                )
+            entitlement = self._repository.get_entitlement_for_update(event_id, guest_id)
             event = self._repository.get_event_for_share(event_id)
             if event is None:
                 raise AttendanceCorrectionResourceNotFoundError(
@@ -180,21 +272,14 @@ class AttendanceCorrectionService:
                 raise AttendanceCorrectionConflictError(
                     "attendance correction conflicts with current state"
                 )
-
-            guest = self._repository.get_guest_for_update(event_id, guest_id)
-            if guest is None:
-                raise AttendanceCorrectionResourceNotFoundError(
-                    "attendance correction resource not found"
-                )
             snapshot = self._repository.get_state_snapshot(event_id, guest_id)
             if snapshot is None:
                 raise AttendanceCorrectionPersistenceError(
                     "attendance correction state could not be read"
                 )
             state = derive_effective_attendance_state(event_id=event_id, snapshot=snapshot)
-            if (
-                state.correction_revision != expected_revision
-                or state.effective_status is not expected_status
+            if state.correction_revision != expected_revision or (
+                expected_status is not None and state.effective_status is not expected_status
             ):
                 raise AttendanceCorrectionConflictError(
                     "attendance correction conflicts with current state"
@@ -220,6 +305,45 @@ class AttendanceCorrectionService:
                         "attendance correction conflicts with current state"
                     )
 
+            if validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE:
+                maximum = min(
+                    guest.allowed_companions,
+                    event.max_companions_per_invitation,
+                    MAX_COMPANIONS_PER_INVITATION,
+                )
+                if (
+                    guest.status is not GuestStatus.ACTIVE
+                    or entitlement is None
+                    or state.effective_status is not EffectiveAttendanceStatus.ATTENDED
+                    or validated_declared is None
+                    or validated_companions is None
+                    or validated_declared > maximum
+                    or validated_companions > validated_declared
+                ):
+                    raise AttendanceCorrectionConflictError(
+                        "attendance correction conflicts with current state"
+                    )
+                if (
+                    validated_declared == entitlement.declared_companions
+                    and validated_companions == entitlement.companions_admitted
+                ):
+                    raise AttendanceCorrectionConflictError(
+                        "attendance correction conflicts with current state"
+                    )
+                evidenced_ceiling = self._repository.get_evidenced_companion_ceiling(
+                    event_id,
+                    guest_id,
+                    establishing_correction_id=entitlement.establishing_correction_id,
+                )
+                if evidenced_ceiling is None:
+                    raise AttendanceCorrectionPersistenceError(
+                        "attendance correction evidence could not be read"
+                    )
+                if validated_companions > evidenced_ceiling:
+                    raise AttendanceCorrectionConflictError(
+                        "attendance correction conflicts with current state"
+                    )
+
             correction = GuestAttendanceCorrection(
                 id=uuid4(),
                 event_id=event_id,
@@ -229,7 +353,33 @@ class AttendanceCorrectionService:
                 decision=validated_decision,
                 reason_code=validated_reason,
                 reason_note=normalized_note,
-                companions_admitted=validated_companions,
+                companions_admitted=(
+                    validated_companions
+                    if validated_decision is AttendanceCorrectionDecision.SET_ATTENDED
+                    else None
+                ),
+                previous_declared_companions=(
+                    entitlement.declared_companions
+                    if validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE
+                    and entitlement is not None
+                    else None
+                ),
+                previous_companions_admitted=(
+                    entitlement.companions_admitted
+                    if validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE
+                    and entitlement is not None
+                    else None
+                ),
+                resulting_declared_companions=(
+                    validated_declared
+                    if validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE
+                    else None
+                ),
+                resulting_companions_admitted=(
+                    validated_companions
+                    if validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE
+                    else None
+                ),
                 gate_attendance_record_id=state.gate_attendance_record_id,
                 previous_effective_status=state.effective_status,
                 resulting_effective_status=resulting_status,
@@ -238,6 +388,29 @@ class AttendanceCorrectionService:
             )
             self._repository.add(correction)
             self._repository.flush()
+            if (
+                validated_decision is AttendanceCorrectionDecision.SET_ATTENDED
+                and entitlement is None
+            ):
+                assert validated_companions is not None
+                entitlement = GuestCompanionEntitlement(
+                    id=uuid4(),
+                    event_id=event_id,
+                    guest_id=guest_id,
+                    primary_attendance_id=None,
+                    establishing_correction_id=correction.id,
+                    declared_companions=validated_companions,
+                    companions_admitted=validated_companions,
+                )
+                self._repository.add_entitlement(entitlement)
+                self._repository.flush()
+            elif validated_decision is AttendanceCorrectionDecision.SET_COMPANION_STATE:
+                assert entitlement is not None
+                assert validated_declared is not None
+                assert validated_companions is not None
+                entitlement.declared_companions = validated_declared
+                entitlement.companions_admitted = validated_companions
+                self._repository.flush()
             if not isinstance(correction.created_at, datetime):
                 raise AttendanceCorrectionPersistenceError(
                     "attendance correction could not be recorded"
@@ -252,6 +425,17 @@ class AttendanceCorrectionService:
                     decision=correction.decision,
                     companions_admitted=correction.companions_admitted,
                     created_at=correction.created_at,
+                    resulting_effective_status=correction.resulting_effective_status,
+                    resulting_effective_source=correction.resulting_effective_source,
+                    resulting_declared_companions=correction.resulting_declared_companions,
+                    resulting_companions_admitted=correction.resulting_companions_admitted,
+                ),
+                allowed_companions=guest.allowed_companions,
+                declared_companions=(
+                    None if entitlement is None else entitlement.declared_companions
+                ),
+                companions_admitted=(
+                    None if entitlement is None else entitlement.companions_admitted
                 ),
             )
             effective = derive_effective_attendance_state(
@@ -407,6 +591,12 @@ class AttendanceCorrectionService:
                     "attendance correction conflicts with current state"
                 )
             return EffectiveAttendanceStatus.NOT_ATTENDED, EffectiveAttendanceSource.MANUAL
+        if decision is AttendanceCorrectionDecision.SET_COMPANION_STATE:
+            if state.effective_status is not EffectiveAttendanceStatus.ATTENDED:
+                raise AttendanceCorrectionConflictError(
+                    "attendance correction conflicts with current state"
+                )
+            return state.effective_status, state.effective_source
         if state.effective_source is not EffectiveAttendanceSource.MANUAL:
             raise AttendanceCorrectionConflictError(
                 "attendance correction conflicts with current state"
@@ -422,7 +612,12 @@ class AttendanceCorrectionService:
         return value
 
     @staticmethod
-    def _validate_expected_status(value: object) -> EffectiveAttendanceStatus:
+    def _validate_expected_status(
+        value: object | None,
+        decision: AttendanceCorrectionDecision,
+    ) -> EffectiveAttendanceStatus | None:
+        if decision is AttendanceCorrectionDecision.SET_COMPANION_STATE and value is None:
+            return None
         if not isinstance(value, EffectiveAttendanceStatus):
             raise AttendanceCorrectionRequestError("expected effective status is invalid")
         return value
@@ -457,7 +652,10 @@ class AttendanceCorrectionService:
         value: object | None,
         decision: AttendanceCorrectionDecision,
     ) -> int | None:
-        if decision is AttendanceCorrectionDecision.SET_ATTENDED:
+        if decision in {
+            AttendanceCorrectionDecision.SET_ATTENDED,
+            AttendanceCorrectionDecision.SET_COMPANION_STATE,
+        }:
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
@@ -470,6 +668,27 @@ class AttendanceCorrectionService:
         if value is not None:
             raise AttendanceCorrectionRequestError(
                 "attendance correction companion count is invalid"
+            )
+        return None
+
+    @staticmethod
+    def _validate_declared_companions(
+        value: object | None,
+        decision: AttendanceCorrectionDecision,
+    ) -> int | None:
+        if decision is AttendanceCorrectionDecision.SET_COMPANION_STATE:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= MAX_COMPANIONS_PER_INVITATION
+            ):
+                raise AttendanceCorrectionRequestError(
+                    "attendance correction companion declaration is invalid"
+                )
+            return value
+        if value is not None:
+            raise AttendanceCorrectionRequestError(
+                "attendance correction companion declaration is invalid"
             )
         return None
 
@@ -501,4 +720,8 @@ class AttendanceCorrectionService:
             resulting_effective_status=correction.resulting_effective_status,
             resulting_effective_source=correction.resulting_effective_source,
             created_at=correction.created_at,
+            previous_declared_companions=correction.previous_declared_companions,
+            previous_companions_admitted=correction.previous_companions_admitted,
+            resulting_declared_companions=correction.resulting_declared_companions,
+            resulting_companions_admitted=correction.resulting_companions_admitted,
         )
