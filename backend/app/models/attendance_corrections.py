@@ -35,6 +35,7 @@ class AttendanceCorrectionDecision(StrEnum):
     SET_ATTENDED = "SET_ATTENDED"
     SET_NOT_ATTENDED = "SET_NOT_ATTENDED"
     RESTORE_GATE_DERIVED = "RESTORE_GATE_DERIVED"
+    SET_COMPANION_STATE = "SET_COMPANION_STATE"
 
 
 class AttendanceCorrectionReason(StrEnum):
@@ -93,7 +94,8 @@ class GuestAttendanceCorrection(Base):
             name="ck_guest_attendance_corrections_revision_positive",
         ),
         CheckConstraint(
-            "decision IN ('SET_ATTENDED', 'SET_NOT_ATTENDED', 'RESTORE_GATE_DERIVED')",
+            "decision IN ('SET_ATTENDED', 'SET_NOT_ATTENDED', 'RESTORE_GATE_DERIVED', "
+            "'SET_COMPANION_STATE')",
             name="ck_guest_attendance_corrections_decision",
         ),
         CheckConstraint(
@@ -139,9 +141,37 @@ class GuestAttendanceCorrection(Base):
         ),
         CheckConstraint(
             "(decision = 'SET_ATTENDED' AND companions_admitted IS NOT NULL) OR "
-            "(decision IN ('SET_NOT_ATTENDED', 'RESTORE_GATE_DERIVED') "
+            "(decision IN ('SET_NOT_ATTENDED', 'RESTORE_GATE_DERIVED', "
+            "'SET_COMPANION_STATE') "
             "AND companions_admitted IS NULL)",
             name="ck_guest_attendance_corrections_decision_companions",
+        ),
+        CheckConstraint(
+            "(decision = 'SET_COMPANION_STATE' "
+            "AND previous_declared_companions IS NOT NULL "
+            "AND previous_companions_admitted IS NOT NULL "
+            "AND resulting_declared_companions IS NOT NULL "
+            "AND resulting_companions_admitted IS NOT NULL) OR "
+            "(decision IN ('SET_ATTENDED', 'SET_NOT_ATTENDED', 'RESTORE_GATE_DERIVED') "
+            "AND previous_declared_companions IS NULL "
+            "AND previous_companions_admitted IS NULL "
+            "AND resulting_declared_companions IS NULL "
+            "AND resulting_companions_admitted IS NULL)",
+            name="ck_guest_attendance_corrections_companion_snapshot_shape",
+        ),
+        CheckConstraint(
+            "previous_declared_companions IS NULL OR "
+            "(previous_companions_admitted >= 0 "
+            "AND previous_companions_admitted <= previous_declared_companions "
+            f"AND previous_declared_companions <= {MAX_COMPANIONS_PER_INVITATION})",
+            name="ck_guest_attendance_corrections_previous_companion_state",
+        ),
+        CheckConstraint(
+            "resulting_declared_companions IS NULL OR "
+            "(resulting_companions_admitted >= 0 "
+            "AND resulting_companions_admitted <= resulting_declared_companions "
+            f"AND resulting_declared_companions <= {MAX_COMPANIONS_PER_INVITATION})",
+            name="ck_guest_attendance_corrections_resulting_companion_state",
         ),
         CheckConstraint(
             "(decision = 'SET_ATTENDED' "
@@ -156,7 +186,9 @@ class GuestAttendanceCorrection(Base):
             "AND resulting_effective_source = 'GATE') OR "
             "(gate_attendance_record_id IS NULL "
             "AND resulting_effective_status = 'NOT_ATTENDED' "
-            "AND resulting_effective_source = 'NONE')))",
+            "AND resulting_effective_source = 'NONE'))) OR "
+            "(decision = 'SET_COMPANION_STATE' "
+            "AND resulting_effective_status = previous_effective_status)",
             name="ck_guest_attendance_corrections_decision_result",
         ),
         ForeignKeyConstraint(
@@ -241,6 +273,10 @@ class GuestAttendanceCorrection(Base):
     )
     reason_note: Mapped[str | None] = mapped_column(String(REASON_NOTE_MAX_LENGTH))
     companions_admitted: Mapped[int | None] = mapped_column(SmallInteger)
+    previous_declared_companions: Mapped[int | None] = mapped_column(SmallInteger)
+    resulting_declared_companions: Mapped[int | None] = mapped_column(SmallInteger)
+    previous_companions_admitted: Mapped[int | None] = mapped_column(SmallInteger)
+    resulting_companions_admitted: Mapped[int | None] = mapped_column(SmallInteger)
     gate_attendance_record_id: Mapped[UUID | None] = mapped_column()
     previous_effective_status: Mapped[EffectiveAttendanceStatus] = mapped_column(
         Enum(
@@ -300,6 +336,24 @@ def _validate_correction_insert(_: Any, __: Any, target: GuestAttendanceCorrecti
             raise AttendanceCorrectionPersistenceError("correction companion count is invalid")
     elif target.companions_admitted is not None:
         raise AttendanceCorrectionPersistenceError("correction companion count is invalid")
+
+    snapshots = (
+        target.previous_declared_companions,
+        target.previous_companions_admitted,
+        target.resulting_declared_companions,
+        target.resulting_companions_admitted,
+    )
+    if target.decision is AttendanceCorrectionDecision.SET_COMPANION_STATE:
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in snapshots):
+            raise AttendanceCorrectionPersistenceError("correction companion snapshot is invalid")
+        previous_declared, previous_admitted, resulting_declared, resulting_admitted = snapshots
+        if not (
+            0 <= previous_admitted <= previous_declared <= MAX_COMPANIONS_PER_INVITATION
+            and 0 <= resulting_admitted <= resulting_declared <= MAX_COMPANIONS_PER_INVITATION
+        ):
+            raise AttendanceCorrectionPersistenceError("correction companion snapshot is invalid")
+    elif any(value is not None for value in snapshots):
+        raise AttendanceCorrectionPersistenceError("correction companion snapshot is invalid")
 
 
 @event.listens_for(GuestAttendanceCorrection, "before_update")

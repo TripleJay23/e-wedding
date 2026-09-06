@@ -16,7 +16,7 @@ from app.core.settings import Settings
 
 DISPOSABLE_URL = os.getenv("WEDDING_DISPOSABLE_DATABASE_URL")
 PREVIOUS_HEAD = "20260905_0011"
-CURRENT_HEAD = "20260906_0012"
+CURRENT_HEAD = "20260906_0013"
 pytestmark = [
     pytest.mark.postgresql,
     pytest.mark.skipif(
