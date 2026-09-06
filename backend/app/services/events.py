@@ -193,7 +193,15 @@ class EventService:
         """Apply a manual guest update under current event configuration and policy."""
         event = self._require_event(event_id)
         EventLifecycle.require_mutable(event)
-        guest = self.get_guest(event_id, guest_id)
+        guest = self._guests.get_for_event_for_update(event_id, guest_id)
+        if guest is None:
+            raise M3ResourceNotFoundError("guest not found")
+        requested_allowance = values.get("allowed_companions", guest.allowed_companions)
+        if (
+            requested_allowance != guest.allowed_companions
+            and self._guests.has_companion_entitlement(event_id, guest_id)
+        ):
+            raise M3ConflictError("guest companion allowance is locked after admission")
         merged = {
             field_key.value: getattr(guest, field_key.value)
             for field_key, _, _ in DEFAULT_GUEST_FIELD_CONFIGURATION

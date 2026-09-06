@@ -1,14 +1,22 @@
-"""Bounded PostgreSQL persistence operations for M7 gate validation."""
+"""Bounded PostgreSQL persistence operations for gate admission."""
 
 from uuid import UUID
 
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from app.models.attendance import GateScanAttempt, GuestAttendanceRecord
+from app.models.attendance import (
+    GateScanAttempt,
+    GuestAttendanceRecord,
+    GuestCompanionEntitlement,
+)
 from app.models.event import Event
 from app.models.guest import Guest
 from app.models.qr import GuestQrCredential
+from app.repositories.attendance_corrections import (
+    AttendanceCorrectionRepository,
+    AttendanceStateSnapshot,
+)
 
 
 class AttendanceRepository:
@@ -44,6 +52,21 @@ class AttendanceRepository:
     def get_event(self, event_id: UUID) -> Event | None:
         return self._session.get(Event, event_id)
 
+    def get_guest(self, event_id: UUID, guest_id: UUID) -> Guest | None:
+        statement = select(Guest).where(Guest.id == guest_id, Guest.event_id == event_id)
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def get_attempt_by_request(
+        self,
+        event_id: UUID,
+        request_id: UUID,
+    ) -> GateScanAttempt | None:
+        statement = select(GateScanAttempt).where(
+            GateScanAttempt.event_id == event_id,
+            GateScanAttempt.request_id == request_id,
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
     def get_attendance(
         self,
         event_id: UUID,
@@ -54,6 +77,28 @@ class AttendanceRepository:
             GuestAttendanceRecord.guest_id == guest_id,
         )
         return self._session.execute(statement).scalar_one_or_none()
+
+    def get_entitlement_for_update(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+    ) -> GuestCompanionEntitlement | None:
+        statement = (
+            select(GuestCompanionEntitlement)
+            .where(
+                GuestCompanionEntitlement.event_id == event_id,
+                GuestCompanionEntitlement.guest_id == guest_id,
+            )
+            .with_for_update(of=GuestCompanionEntitlement)
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def get_attendance_state_snapshot(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+    ) -> AttendanceStateSnapshot | None:
+        return AttendanceCorrectionRepository(self._session).get_state_snapshot(event_id, guest_id)
 
     def get_guest_attendance(
         self,
@@ -117,6 +162,9 @@ class AttendanceRepository:
 
     def add_attendance(self, attendance: GuestAttendanceRecord) -> None:
         self._session.add(attendance)
+
+    def add_entitlement(self, entitlement: GuestCompanionEntitlement) -> None:
+        self._session.add(entitlement)
 
     def add_attempt(self, attempt: GateScanAttempt) -> None:
         self._session.add(attempt)

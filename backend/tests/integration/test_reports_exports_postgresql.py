@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from openpyxl import load_workbook
-from sqlalchemy import create_engine, delete, func, select, update
+from sqlalchemy import create_engine, delete, func, select, text, update
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.orm import Session
 
@@ -696,6 +696,15 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
         )
         print(f"M9_SIZE_OBSERVATION csv_bytes={csv_size} xlsx_bytes={xlsx_size}")
     finally:
+        if cleanup_required:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "TRUNCATE TABLE gate_scan_attempts, "
+                        "guest_companion_entitlements, guest_attendance_corrections, "
+                        "guest_attendance_records CASCADE"
+                    )
+                )
         engine.dispose()
         if cleanup_required:
             assert disposable_alembic.main(["downgrade", "20260820_0006"]) == 0

@@ -131,6 +131,7 @@ class FakeGuestRepository:
 
     def __init__(self) -> None:
         self.guests: dict[tuple[UUID, UUID], Guest] = {}
+        self.entitled_guests: set[tuple[UUID, UUID]] = set()
         self.added_guest: Guest | None = None
         self.commits = 0
         self.rollbacks = 0
@@ -142,6 +143,12 @@ class FakeGuestRepository:
 
     def get_for_event(self, event_id: UUID, guest_id: UUID) -> Guest | None:
         return self.guests.get((event_id, guest_id))
+
+    def get_for_event_for_update(self, event_id: UUID, guest_id: UUID) -> Guest | None:
+        return self.get_for_event(event_id, guest_id)
+
+    def has_companion_entitlement(self, event_id: UUID, guest_id: UUID) -> bool:
+        return (event_id, guest_id) in self.entitled_guests
 
     def list_for_event(self, event_id: UUID, *, limit: int, offset: int) -> list[Guest]:
         return list(self.guests.values())[offset : offset + limit]
@@ -361,6 +368,28 @@ def test_manual_guest_list_detail_and_update_remain_event_scoped() -> None:
     assert updated.allowed_companions == 2
     with pytest.raises(M3ResourceNotFoundError, match="guest not found"):
         service.get_guest(uuid4(), guest.id)
+
+
+def test_guest_allowance_freezes_after_entitlement_without_blocking_other_updates() -> None:
+    event = make_event()
+    service, _, guests = make_service(event)
+    guest = service.create_guest(event.id, guest_values(allowed_companions=1))
+    guests.entitled_guests.add((event.id, guest.id))
+
+    with pytest.raises(M3ConflictError, match="allowance is locked"):
+        service.update_guest(event.id, guest.id, {"allowed_companions": 2})
+    with pytest.raises(M3ConflictError, match="allowance is locked"):
+        service.update_guest(event.id, guest.id, {"allowed_companions": 0})
+
+    commits_before = guests.commits
+    same = service.update_guest(event.id, guest.id, {"allowed_companions": 1})
+    assert same is guest
+    assert guests.commits == commits_before
+
+    renamed = service.update_guest(event.id, guest.id, {"full_name": "Updated Guest"})
+    assert renamed.full_name == "Updated Guest"
+    assert renamed.allowed_companions == 1
+    assert guests.commits == commits_before + 1
 
 
 def test_manual_guest_mutation_rejects_terminal_or_incomplete_event_configuration() -> None:

@@ -21,6 +21,7 @@ from sqlalchemy import (
     func,
     insert,
     select,
+    text,
     update,
 )
 from sqlalchemy import (
@@ -617,8 +618,10 @@ def test_m8_postgresql_api_integrity_concurrency_queries_and_timings(
         assert sensitive_note not in responses["history"].text
         assert responses["audit"].json()["reason_note"] == sensitive_note
         assert responses["later_manual"].status_code == 201
-        assert responses["later_first_scan"].json()["outcome"] == "ADMITTED"
+        assert responses["later_first_scan"].json()["outcome"] == "ALREADY_CHECKED_IN"
+        assert responses["later_first_scan"].json()["attendance_id"] is None
         assert responses["later_duplicate_scan"].json()["outcome"] == "ALREADY_CHECKED_IN"
+        assert responses["later_duplicate_scan"].json()["attendance_id"] is None
         assert responses["later_effective"].json()["effective_source"] == "MANUAL"
         assert responses["raw_gate_guest"].json()["companions_admitted"] == 2
         assert responses["raw_event"].status_code == 200
@@ -666,7 +669,7 @@ def test_m8_postgresql_api_integrity_concurrency_queries_and_timings(
                     .select_from(GuestAttendanceRecord)
                     .where(GuestAttendanceRecord.guest_id == later_guest.id)
                 )
-                == 1
+                == 0
             )
             assert (
                 session.scalar(
@@ -950,6 +953,15 @@ def test_m8_postgresql_api_integrity_concurrency_queries_and_timings(
             )
         )
     finally:
+        if cleanup_required:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "TRUNCATE TABLE gate_scan_attempts, "
+                        "guest_companion_entitlements, guest_attendance_corrections, "
+                        "guest_attendance_records CASCADE"
+                    )
+                )
         engine.dispose()
         if cleanup_required:
             assert disposable_alembic.main(["downgrade", "20260820_0006"]) == 0
