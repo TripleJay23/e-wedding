@@ -62,6 +62,11 @@ class ReportTotals:
     named_holders_effectively_not_attended: int
     companion_capacity: int
     effective_admitted_companions: int
+    declared_companions: int
+    raw_companions_admitted: int
+    remaining_declared_companion_slots: int
+    released_companion_allowance: int
+    uncommitted_companion_allowance: int
     maximum_total_people_capacity: int
     effective_total_people_attended: int
     remaining_people_capacity: int
@@ -89,9 +94,13 @@ class AttendanceRosterRow:
     category: str | None
     table_number: str | None
     allowed_companions: int
+    declared_companions: int | None
     effective_status: EffectiveAttendanceStatus
     effective_source: EffectiveAttendanceSource
     effective_admitted_companions: int
+    raw_companions_admitted: int
+    remaining_companion_slots: int | None
+    released_companion_allowance: int | None
     effective_party_size: int
     effective_at: datetime | None
     raw_gate_attended: bool
@@ -172,10 +181,29 @@ class ReportService:
                     category=guest.category,
                     table_number=guest.table_number,
                     allowed_companions=guest.allowed_companions,
+                    declared_companions=effective.declared_companions,
                     effective_status=effective.effective_status,
                     effective_source=effective.effective_source,
-                    effective_admitted_companions=effective.effective_companions_admitted,
-                    effective_party_size=effective.effective_party_size,
+                    effective_admitted_companions=(
+                        effective.effective_companions_admitted
+                        if effective.companions_admitted is None
+                        else effective.companions_admitted
+                    ),
+                    raw_companions_admitted=guest.raw_companions_admitted,
+                    remaining_companion_slots=effective.remaining_companion_slots,
+                    released_companion_allowance=(
+                        None
+                        if effective.declared_companions is None
+                        else guest.allowed_companions - effective.declared_companions
+                    ),
+                    effective_party_size=(
+                        int(effective.effective_status is EffectiveAttendanceStatus.ATTENDED)
+                        + (
+                            effective.effective_companions_admitted
+                            if effective.companions_admitted is None
+                            else effective.companions_admitted
+                        )
+                    ),
                     effective_at=effective.effective_at,
                     raw_gate_attended=guest.raw_gate_attended,
                     raw_gate_checked_in_at=guest.raw_gate_checked_in_at,
@@ -194,6 +222,11 @@ class ReportService:
         invited = len(rows)
         attended = sum(row.effective_status is EffectiveAttendanceStatus.ATTENDED for row in rows)
         companions = sum(row.effective_admitted_companions for row in rows)
+        declared = sum(row.declared_companions or 0 for row in rows)
+        raw_companions = sum(row.raw_companions_admitted for row in rows)
+        remaining_declared = sum(row.remaining_companion_slots or 0 for row in rows)
+        released = sum(row.released_companion_allowance or 0 for row in rows)
+        uncommitted = sum(row.allowed_companions for row in rows if row.declared_companions is None)
         capacity = sum(row.allowed_companions for row in rows)
         maximum_people = invited + capacity
         total_attended = attended + companions
@@ -211,6 +244,11 @@ class ReportService:
             named_holders_effectively_not_attended=invited - attended,
             companion_capacity=capacity,
             effective_admitted_companions=companions,
+            declared_companions=declared,
+            raw_companions_admitted=raw_companions,
+            remaining_declared_companion_slots=remaining_declared,
+            released_companion_allowance=released,
+            uncommitted_companion_allowance=uncommitted,
             maximum_total_people_capacity=maximum_people,
             effective_total_people_attended=total_attended,
             remaining_people_capacity=maximum_people - total_attended,

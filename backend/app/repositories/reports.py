@@ -5,10 +5,18 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, func, select, true
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from app.models.attendance import GateScanAttempt, GateScanOutcome, GuestAttendanceRecord
-from app.models.attendance_corrections import GuestAttendanceCorrection
+from app.models.attendance import (
+    GateScanAttempt,
+    GateScanOutcome,
+    GuestAttendanceRecord,
+    GuestCompanionEntitlement,
+)
+from app.models.attendance_corrections import (
+    AttendanceCorrectionDecision,
+    GuestAttendanceCorrection,
+)
 from app.models.event import Event, EventStatus
 from app.models.guest import Guest, GuestStatus
 from app.repositories.attendance_corrections import (
@@ -53,6 +61,7 @@ class ReportGuestEvidence:
     state_snapshot: AttendanceStateSnapshot
     raw_gate_attended: bool
     raw_gate_checked_in_at: datetime | None
+    raw_companions_admitted: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +138,24 @@ class ReportRepository:
             .where(GuestAttendanceRecord.event_id == event_id)
             .subquery()
         )
+        guest_gate_companions = (
+            select(
+                GateScanAttempt.event_id.label("event_id"),
+                GateScanAttempt.guest_id.label("guest_id"),
+                func.coalesce(
+                    func.sum(func.coalesce(GateScanAttempt.companions_admitted_this_scan, 0)),
+                    0,
+                ).label("raw_gate_companions_admitted"),
+            )
+            .where(
+                GateScanAttempt.event_id == event_id,
+                GateScanAttempt.guest_id.is_not(None),
+                GateScanAttempt.outcome == GateScanOutcome.ADMITTED,
+            )
+            .group_by(GateScanAttempt.event_id, GateScanAttempt.guest_id)
+            .subquery()
+        )
+        establishing_correction = aliased(GuestAttendanceCorrection)
         statement = (
             select(
                 Event.id.label("event_id"),
@@ -151,7 +178,29 @@ class ReportRepository:
                 GuestAttendanceCorrection.revision_number.label("correction_revision"),
                 GuestAttendanceCorrection.decision.label("correction_decision"),
                 GuestAttendanceCorrection.companions_admitted.label("manual_companions_admitted"),
+                GuestAttendanceCorrection.resulting_effective_status.label(
+                    "correction_resulting_status"
+                ),
+                GuestAttendanceCorrection.resulting_effective_source.label(
+                    "correction_resulting_source"
+                ),
+                GuestAttendanceCorrection.resulting_declared_companions.label(
+                    "correction_resulting_declared"
+                ),
+                GuestAttendanceCorrection.resulting_companions_admitted.label(
+                    "correction_resulting_admitted"
+                ),
                 GuestAttendanceCorrection.created_at.label("correction_created_at"),
+                GuestCompanionEntitlement.declared_companions.label(
+                    "entitlement_declared_companions"
+                ),
+                GuestCompanionEntitlement.companions_admitted.label(
+                    "entitlement_companions_admitted"
+                ),
+                (
+                    func.coalesce(guest_gate_companions.c.raw_gate_companions_admitted, 0)
+                    + func.coalesce(establishing_correction.companions_admitted, 0)
+                ).label("raw_companions_admitted"),
                 *scan_metrics.c,
                 gate_companions.c.actual_companions_admitted_at_gate,
             )
@@ -170,6 +219,30 @@ class ReportRepository:
             .outerjoin(
                 GuestAttendanceCorrection,
                 GuestAttendanceCorrection.id == latest_correction_id,
+            )
+            .outerjoin(
+                GuestCompanionEntitlement,
+                and_(
+                    GuestCompanionEntitlement.event_id == Guest.event_id,
+                    GuestCompanionEntitlement.guest_id == Guest.id,
+                ),
+            )
+            .outerjoin(
+                guest_gate_companions,
+                and_(
+                    guest_gate_companions.c.event_id == Guest.event_id,
+                    guest_gate_companions.c.guest_id == Guest.id,
+                ),
+            )
+            .outerjoin(
+                establishing_correction,
+                and_(
+                    establishing_correction.id
+                    == GuestCompanionEntitlement.establishing_correction_id,
+                    establishing_correction.event_id == Guest.event_id,
+                    establishing_correction.guest_id == Guest.id,
+                    establishing_correction.decision == AttendanceCorrectionDecision.SET_ATTENDED,
+                ),
             )
             .join(scan_metrics, true())
             .join(gate_companions, true())
@@ -227,6 +300,10 @@ class ReportRepository:
                 decision=row["correction_decision"],
                 companions_admitted=row["manual_companions_admitted"],
                 created_at=row["correction_created_at"],
+                resulting_effective_status=row["correction_resulting_status"],
+                resulting_effective_source=row["correction_resulting_source"],
+                resulting_declared_companions=row["correction_resulting_declared"],
+                resulting_companions_admitted=row["correction_resulting_admitted"],
             )
         return ReportGuestEvidence(
             id=row["guest_id"],
@@ -239,7 +316,11 @@ class ReportRepository:
                 guest_id=row["guest_id"],
                 attendance=attendance,
                 latest_correction=correction,
+                allowed_companions=row["allowed_companions"],
+                declared_companions=row["entitlement_declared_companions"],
+                companions_admitted=row["entitlement_companions_admitted"],
             ),
             raw_gate_attended=attendance is not None,
             raw_gate_checked_in_at=None if attendance is None else attendance.checked_in_at,
+            raw_companions_admitted=row["raw_companions_admitted"],
         )

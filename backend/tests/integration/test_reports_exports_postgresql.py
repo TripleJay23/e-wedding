@@ -165,6 +165,7 @@ def correct(
     expected_status: EffectiveAttendanceStatus,
     decision: AttendanceCorrectionDecision,
     companions: int | None = None,
+    declared: int | None = None,
 ) -> None:
     AttendanceCorrectionService(AttendanceCorrectionRepository(session)).record_correction(
         event_id=event_id,
@@ -176,6 +177,7 @@ def correct(
         reason_note="Synthetic private reason that reports must omit",
         companions_admitted=companions,
         administrator_id=administrator_id,
+        declared_companions=declared,
     )
 
 
@@ -293,7 +295,7 @@ async def exercise_api(
         return responses
 
 
-def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
+def test_m9_c26_postgresql_reconciliation_exports_privacy_queries_and_timings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -323,10 +325,12 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 session,
                 event,
                 administrator.id,
-                "Guest A",
-                allowed=0,
-                category="Friends",
-                credential_status=QrCredentialStatus.ACTIVE,
+                '=HYPERLINK("https://invalid.example")',
+                allowed=2,
+                invitation_type="@individual",
+                category="+formula",
+                table="-1",
+                credential_status=QrCredentialStatus.INACTIVE,
             )
             _guest_b, raw_b = add_guest(
                 session,
@@ -343,12 +347,12 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 event,
                 administrator.id,
                 "Guest C",
-                allowed=1,
+                allowed=2,
                 category="Family",
                 table="1",
                 credential_status=QrCredentialStatus.ACTIVE,
             )
-            guest_d, raw_d = add_guest(
+            _guest_d, raw_d = add_guest(
                 session,
                 event,
                 administrator.id,
@@ -361,27 +365,34 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 event,
                 administrator.id,
                 "Guest E",
-                allowed=1,
-                category="Friends",
+                allowed=2,
+                category="Family",
+                table="1",
                 credential_status=QrCredentialStatus.ACTIVE,
             )
-            _, raw_f = add_guest(
+            guest_f, raw_f = add_guest(
                 session,
                 event,
                 administrator.id,
-                '=HYPERLINK("https://invalid.example")',
-                allowed=0,
-                invitation_type="@individual",
-                category="+formula",
-                table="-1",
-                credential_status=QrCredentialStatus.INACTIVE,
+                "Guest F",
+                allowed=2,
+                credential_status=QrCredentialStatus.ACTIVE,
             )
-            _, raw_g = add_guest(
+            guest_g, raw_g = add_guest(
                 session,
                 event,
                 administrator.id,
                 "Guest G",
                 allowed=2,
+                credential_status=QrCredentialStatus.ACTIVE,
+            )
+            _, raw_superseded = add_guest(
+                session,
+                event,
+                administrator.id,
+                "Excluded Superseded Guest",
+                allowed=0,
+                guest_status=GuestStatus.INACTIVE,
                 credential_status=QrCredentialStatus.SUPERSEDED,
             )
             _, raw_ineligible = add_guest(
@@ -424,6 +435,7 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                     raw_e,
                     raw_f,
                     raw_g,
+                    raw_superseded,
                     raw_ineligible,
                     other_raw,
                 )
@@ -431,14 +443,21 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
             scan(
                 session,
                 event_id=event.id,
-                raw=raw_a or "",
+                raw=raw_b or "",
                 companions=0,
                 administrator_id=administrator.id,
             )
             scan(
                 session,
                 event_id=event.id,
-                raw=raw_b or "",
+                raw=raw_c or "",
+                companions=1,
+                administrator_id=administrator.id,
+            )
+            scan(
+                session,
+                event_id=event.id,
+                raw=raw_d or "",
                 companions=2,
                 administrator_id=administrator.id,
             )
@@ -452,7 +471,14 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
             scan(
                 session,
                 event_id=event.id,
-                raw=raw_e or "",
+                raw=raw_f or "",
+                companions=2,
+                administrator_id=administrator.id,
+            )
+            scan(
+                session,
+                event_id=event.id,
+                raw=raw_g or "",
                 companions=1,
                 administrator_id=administrator.id,
             )
@@ -480,14 +506,14 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
             scan(
                 session,
                 event_id=event.id,
-                raw=raw_f or "",
+                raw=raw_a or "",
                 companions=0,
                 administrator_id=administrator.id,
             )
             scan(
                 session,
                 event_id=event.id,
-                raw=raw_g or "",
+                raw=raw_superseded or "",
                 companions=0,
                 administrator_id=administrator.id,
             )
@@ -498,18 +524,21 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 companions=0,
                 administrator_id=administrator.id,
             )
-            scan(
-                session,
-                event_id=event.id,
-                raw=raw_c or "",
-                companions=2,
-                administrator_id=administrator.id,
-            )
-
             correct(
                 session,
                 event_id=event.id,
                 guest_id=guest_c.id,
+                administrator_id=administrator.id,
+                revision=0,
+                expected_status=EffectiveAttendanceStatus.ATTENDED,
+                decision=AttendanceCorrectionDecision.SET_COMPANION_STATE,
+                companions=1,
+                declared=2,
+            )
+            correct(
+                session,
+                event_id=event.id,
+                guest_id=guest_e.id,
                 administrator_id=administrator.id,
                 revision=0,
                 expected_status=EffectiveAttendanceStatus.NOT_ATTENDED,
@@ -519,29 +548,22 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
             correct(
                 session,
                 event_id=event.id,
-                guest_id=guest_d.id,
+                guest_id=guest_f.id,
                 administrator_id=administrator.id,
                 revision=0,
                 expected_status=EffectiveAttendanceStatus.ATTENDED,
-                decision=AttendanceCorrectionDecision.SET_NOT_ATTENDED,
+                decision=AttendanceCorrectionDecision.SET_COMPANION_STATE,
+                companions=1,
+                declared=2,
             )
             correct(
                 session,
                 event_id=event.id,
-                guest_id=guest_e.id,
+                guest_id=guest_g.id,
                 administrator_id=administrator.id,
                 revision=0,
                 expected_status=EffectiveAttendanceStatus.ATTENDED,
                 decision=AttendanceCorrectionDecision.SET_NOT_ATTENDED,
-            )
-            correct(
-                session,
-                event_id=event.id,
-                guest_id=guest_e.id,
-                administrator_id=administrator.id,
-                revision=1,
-                expected_status=EffectiveAttendanceStatus.NOT_ATTENDED,
-                decision=AttendanceCorrectionDecision.RESTORE_GATE_DERIVED,
             )
 
         with Session(engine) as session:
@@ -562,19 +584,29 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
 
         assert responses["summary"].status_code == 200
         summary = responses["summary"].json()
+        aggregate_payload = responses["summary"].text
+        assert all(
+            forbidden not in aggregate_payload
+            for forbidden in ('"guest_id"', '"full_name"', '"table_number"', '"category"')
+        )
         assert summary["totals"] == {
             "named_holders_invited": 7,
-            "named_holders_effectively_attended": 4,
-            "named_holders_effectively_not_attended": 3,
-            "companion_capacity": 7,
-            "effective_admitted_companions": 4,
-            "maximum_total_people_capacity": 14,
-            "effective_total_people_attended": 8,
-            "remaining_people_capacity": 6,
-            "named_holder_attendance_percentage": 57.14,
+            "named_holders_effectively_attended": 5,
+            "named_holders_effectively_not_attended": 2,
+            "companion_capacity": 13,
+            "declared_companions": 7,
+            "effective_admitted_companions": 5,
+            "raw_companions_admitted": 6,
+            "remaining_declared_companion_slots": 2,
+            "released_companion_allowance": 4,
+            "uncommitted_companion_allowance": 2,
+            "maximum_total_people_capacity": 20,
+            "effective_total_people_attended": 10,
+            "remaining_people_capacity": 10,
+            "named_holder_attendance_percentage": 71.43,
         }
         assert summary["raw_gate_metrics"] == {
-            "real_gate_admissions": 4,
+            "real_gate_admissions": 5,
             "duplicate_scan_attempts": 1,
             "unknown_credential_attempts": 1,
             "wrong_event_attempts": 1,
@@ -582,13 +614,13 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
             "superseded_credential_attempts": 1,
             "ineligible_guest_attempts": 1,
             "companion_limit_exceeded_attempts": 1,
-            "actual_companions_admitted_at_gate": 4,
+            "actual_companions_admitted_at_gate": 5,
         }
         assert responses["roster"].status_code == 200
         assert responses["roster"].json()["total"] == 7
         assert len(responses["roster"].json()["items"]) == 3
         assert responses["filtered"].status_code == 200
-        assert [row["full_name"] for row in responses["filtered"].json()["items"]] == ["Guest C"]
+        assert [row["full_name"] for row in responses["filtered"].json()["items"]] == ["Guest E"]
         assert responses["other"].json()["totals"]["named_holders_invited"] == 1
         assert responses["missing_event"].status_code == 404
         assert responses["bad_filter"].status_code == 422
@@ -620,6 +652,31 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 assert forbidden not in response.text
 
         json_report = responses["json"].json()
+        json_roster = {row["full_name"]: row for row in json_report["attendance_roster"]}
+        guest_a = json_roster['=HYPERLINK("https://invalid.example")']
+        assert guest_a["declared_companions"] is None
+        assert guest_a["remaining_companion_slots"] is None
+        assert guest_a["released_companion_allowance"] is None
+        assert json_roster["Guest B"]["declared_companions"] == 0
+        assert json_roster["Guest B"]["effective_admitted_companions"] == 0
+        assert json_roster["Guest B"]["remaining_companion_slots"] == 0
+        assert json_roster["Guest C"]["remaining_companion_slots"] == 1
+        assert json_roster["Guest D"]["remaining_companion_slots"] == 0
+        assert json_roster["Guest E"]["raw_gate_attended"] is False
+        assert json_roster["Guest E"]["raw_companions_admitted"] == 1
+        assert json_roster["Guest F"]["raw_companions_admitted"] == 2
+        assert json_roster["Guest F"]["effective_admitted_companions"] == 1
+        assert json_roster["Guest G"]["effective_status"] == "NOT_ATTENDED"
+        assert json_roster["Guest G"]["effective_admitted_companions"] == 1
+        assert json_roster["Guest G"]["effective_party_size"] == 1
+        assert all(
+            0
+            <= row["effective_admitted_companions"]
+            <= row["declared_companions"]
+            <= row["allowed_companions"]
+            for row in json_roster.values()
+            if row["declared_companions"] is not None
+        )
         csv_rows = list(csv.reader(io.StringIO(responses["csv"].content.decode("utf-8"))))
         workbook = load_workbook(io.BytesIO(responses["xlsx"].content), read_only=True)
         try:
@@ -639,15 +696,30 @@ def test_m9_postgresql_reconciliation_exports_privacy_queries_and_timings(
                 json_report["summary"]["totals"]["named_holders_effectively_attended"]
                 == csv_attended
                 == xlsx_attended
-                == 4
+                == 5
             )
             csv_header_index = csv_rows.index(["Attendance Roster"]) + 1
-            dangerous_csv = next(
+            csv_header = csv_rows[csv_header_index]
+            csv_by_name = {row[0]: row for row in csv_rows[csv_header_index + 1 :]}
+            xlsx_header = [cell.value for cell in roster_rows[0]]
+            xlsx_by_name = {row[0].value: row for row in roster_rows[1:]}
+            declared_index = csv_header.index("Declared Companions")
+            remaining_index = csv_header.index("Remaining Companion Slots")
+            released_index = csv_header.index("Released Companion Allowance")
+            guest_a_csv = next(
                 row for row in csv_rows[csv_header_index + 1 :] if "HYPERLINK" in row[0]
             )
-            dangerous_xlsx = next(
-                row for row in roster_rows[1:] if "HYPERLINK" in str(row[0].value)
-            )
+            guest_a_xlsx = next(row for row in roster_rows[1:] if "HYPERLINK" in str(row[0].value))
+            assert csv_header == xlsx_header
+            assert guest_a_csv[declared_index] == ""
+            assert guest_a_xlsx[declared_index].value is None
+            assert csv_by_name["Guest B"][declared_index] == "0"
+            assert csv_by_name["Guest B"][remaining_index] == "0"
+            assert xlsx_by_name["Guest B"][declared_index].value == 0
+            assert xlsx_by_name["Guest B"][remaining_index].value == 0
+            assert guest_a_csv[released_index] == ""
+            dangerous_csv = guest_a_csv
+            dangerous_xlsx = guest_a_xlsx
             assert dangerous_csv[:4] == [
                 '\'=HYPERLINK("https://invalid.example")',
                 "'@individual",

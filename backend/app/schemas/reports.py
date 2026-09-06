@@ -34,6 +34,11 @@ class ReportTotalsResponse(BaseModel):
     named_holders_effectively_not_attended: int = Field(ge=0)
     companion_capacity: int = Field(ge=0)
     effective_admitted_companions: int = Field(ge=0)
+    declared_companions: int = Field(ge=0)
+    raw_companions_admitted: int = Field(ge=0)
+    remaining_declared_companion_slots: int = Field(ge=0)
+    released_companion_allowance: int = Field(ge=0)
+    uncommitted_companion_allowance: int = Field(ge=0)
     maximum_total_people_capacity: int = Field(ge=0)
     effective_total_people_attended: int = Field(ge=0)
     remaining_people_capacity: int = Field(ge=0)
@@ -82,9 +87,13 @@ class AttendanceRosterRowResponse(BaseModel):
     category: str | None
     table_number: str | None
     allowed_companions: int = Field(ge=0, le=2)
+    declared_companions: int | None = Field(default=None, ge=0, le=2)
     effective_status: EffectiveAttendanceStatus
     effective_source: EffectiveAttendanceSource
     effective_admitted_companions: int = Field(ge=0, le=2)
+    raw_companions_admitted: int = Field(ge=0)
+    remaining_companion_slots: int | None = Field(default=None, ge=0, le=2)
+    released_companion_allowance: int | None = Field(default=None, ge=0, le=2)
     effective_party_size: int = Field(ge=0, le=3)
     effective_at: datetime | None
     raw_gate_attended: bool

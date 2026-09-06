@@ -193,6 +193,7 @@ def _correction_row(*, include_evidence: bool = True) -> dict[str, Any]:
         "allowed_companions": 2,
         "entitlement_declared_companions": 1,
         "entitlement_companions_admitted": 1,
+        "raw_companions_admitted": 1,
     }
 
 
