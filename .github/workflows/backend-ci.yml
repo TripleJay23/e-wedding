@@ -125,14 +125,37 @@ jobs:
       - name: Verify Alembic lifecycle
         run: |
           uv run --project backend wedding-disposable-alembic upgrade head
-          uv run --project backend wedding-disposable-alembic current
-          heads="$(uv run --project backend alembic -c backend/alembic.ini heads)"
-          test "$heads" = "20260821_0008 (head)"
+          heads_output="$(uv run --project backend alembic -c backend/alembic.ini heads)"
+          mapfile -t head_lines <<< "$heads_output"
+          test "${#head_lines[@]}" -eq 1
+          case "${head_lines[0]}" in
+            *" (head)") sole_head="${head_lines[0]% (head)}" ;;
+            *) exit 1 ;;
+          esac
+
+          read_current_revision() {
+            local current_output
+            current_output="$(uv run --project backend wedding-disposable-alembic current 2>&1)"
+            printf '%s\n' "$current_output"
+            current_revision="$(
+              printf '%s\n' "$current_output" |
+                sed -n 's/^current Alembic revision: //p' |
+                tail -n 1
+            )"
+            test -n "$current_revision"
+          }
+
+          read_current_revision
+          test "$current_revision" = "$sole_head"
           uv run --project backend wedding-disposable-alembic check
-          uv run --project backend wedding-disposable-alembic downgrade 20260821_0007
-          uv run --project backend wedding-disposable-alembic current
+
+          uv run --project backend wedding-disposable-alembic downgrade -1
+          read_current_revision
+          test "$current_revision" != "$sole_head"
+
           uv run --project backend wedding-disposable-alembic upgrade head
-          uv run --project backend wedding-disposable-alembic current
+          read_current_revision
+          test "$current_revision" = "$sole_head"
           uv run --project backend wedding-disposable-alembic check
 
       - name: Run repository-safe backend tests
