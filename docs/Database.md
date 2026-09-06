@@ -1,7 +1,7 @@
 # Database Contract
 
 PostgreSQL 17 is authoritative. Alembic maintains one linear migration chain from
-`20260814_0001` through the sole head `20260821_0008`.
+`20260814_0001` through the sole head `20260906_0013`.
 
 H2 Excel hardening changed parser/service behavior and tests only; it introduced no
 migration, table, column, or breaking API contract.
@@ -34,12 +34,15 @@ migration, table, column, or breaking API contract.
   approval/revocation history.
 - `generated_guest_cards`: pinned render identities, protected artifact digest/key,
   dimensions, lifecycle, actor, and timestamps.
-- `guest_attendance_records`: one immutable successful gate-derived admission per
-  guest with actual companions and actor.
-- `gate_scan_attempts`: immutable bounded evidence for each meaningful scan
-  outcome; stores only a credential fingerprint, never the raw value.
+- `guest_attendance_records`: one immutable successful primary gate admission per
+  guest with initial companion count and actor.
+- `guest_companion_entitlements`: current declared and effective cumulative
+  companion state, established by exactly one primary attendance or correction.
+- `gate_scan_attempts`: immutable bounded evidence for each meaningful admission
+  command/outcome, request idempotency, transition delta, and post-state; stores
+  only a credential fingerprint, never the raw value.
 - `guest_attendance_corrections`: append-only optimistic correction chain and
-  resulting effective state.
+  resulting effective attendance/companion state.
 
 Reports are calculated on demand and have no report-storage table or setting.
 
@@ -47,8 +50,13 @@ Reports are calculated on demand and have no report-storage table or setting.
 
 - one singleton `SUPER_ADMIN`; protected authentication requires an active row;
 - guest/import/QR/card/attendance data remains event scoped;
-- event companion maximum is `0..2`, defaults to 2, and guest/admitted values
-  cannot exceed persisted policy;
+- event companion maximum is `0..2`, defaults to 2, and guest allowance cannot
+  exceed persisted policy;
+- guest allowance is configured invitation capacity, entitlement declaration is
+  the locked total, and entitlement admission is current effective cumulative
+  consumption; `0 <= admitted <= declared <= allowed`;
+- entitlement origin is exclusive: gate origin has a primary attendance reference,
+  while correction origin has an establishing correction reference;
 - normalized original canonical import snapshots are immutable; current corrected
   values remain separate; corrections and revalidations append revision evidence;
   progression selections lock and validate all selected rows;
@@ -67,6 +75,8 @@ Migration commands must verify the connected database and revision before action
 Tests must never fall back to development or staging. Schema history must not be
 squashed during release cleanup.
 
-The current schema stores invitation maximum capacity and actual gate admission;
-it does not implement a first-scan declared-companion lock. Any future companion
-entitlement lifecycle schema is a separate design decision after H2.
+An unestablished invitation has no entitlement row, represented as null declaration,
+admission, and remaining values at the API/report boundary. An established zero
+declaration persists zero declaration and admission and has zero remaining slots.
+Entitlement does not create companion guest rows, QR credentials, cards, or
+attendance-holder identities.

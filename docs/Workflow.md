@@ -90,6 +90,7 @@ also verifies archive hygiene, publication exclusions, licensing position, and
 Git state. Repository rename, remote configuration, publication, main movement,
 and Flutter work each require their own explicit checkpoint.
 
-After H2 closeout, the next backend checkpoint is **C1 — Companion Entitlement
-Lifecycle Current-State Audit & Contract**. It precedes Flutter and does not imply
-that first-scan companion declaration locking already exists.
+The stacked C2 companion entitlement lifecycle is implemented and accepted through
+C2.7. C2.8 is its documentation-only release closeout. Permanent-branch review,
+integration, remote operations, and Flutter each remain separate explicitly
+authorized checkpoints.

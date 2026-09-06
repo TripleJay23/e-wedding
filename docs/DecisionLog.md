@@ -28,7 +28,11 @@ These durable decisions prevent contract drift.
 | Gate evidence is immutable and attendance corrections are append-only | LOCKED |
 | Effective attendance is derived from gate evidence plus the correction chain | LOCKED |
 | JSON/CSV/XLSX reports share one privacy-bounded dataset | LOCKED |
-| Alembic is one clean linear history through `20260821_0008`; no inherited migration chain | LOCKED |
+| Alembic is one clean linear history through `20260906_0013`; no inherited migration chain | LOCKED |
+| Companion invitation allowance, locked declaration, effective admission, and raw evidence remain separate | LOCKED |
+| PRIMARY establishes entitlement; later COMPANION admission consumes remaining locked slots | LOCKED |
+| Inspect is read-only; admit revalidates transactionally and uses client request-id idempotency | LOCKED |
+| Aggregate reports are de-identified; authenticated guest-level reports retain limited operational identity but no contact, QR, correction-sensitive, or internal provenance data | LOCKED |
 | Development/staging database identities remain operational guardrails, not branding strings | LOCKED |
 | Repository slug is `e-wedding`; product display name is `e-Wedding` | ACCEPTED |
 | Existing Compose identities, canonical staging volume, and database identities remain unchanged during the product rename | LOCKED |

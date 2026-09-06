@@ -24,7 +24,7 @@ pushes, and publication; local setup must not invent or modify remotes.
 ## Tracked foundation
 
 The repository retains root documentation and policy files, environment examples,
-Compose definitions, `pytest.ini`, the `backend/app` package, eight linear Alembic
+Compose definitions, `pytest.ini`, the `backend/app` package, thirteen linear Alembic
 migrations, all tests, `backend/pyproject.toml`, and `backend/uv.lock`.
 
 Create local environment files only by copying the examples. Keep all real values

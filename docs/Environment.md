@@ -96,4 +96,4 @@ exact project/volume verification, and a confirmed recovery position.
 Before every migration action: sanitize the configured target, connect, read the
 actual database/user identity, verify the environment allowlist, inspect current
 and target revisions, confirm the sole head, and only then execute the requested
-operation. The current repository head is `20260821_0008`.
+operation. The current repository head is `20260906_0013`.

@@ -43,6 +43,21 @@ outcomes, and coverage. Release-impacting changes require:
 - Compose parse/configuration validation;
 - private-file, secret-pattern, PII, and documentation-reference audits.
 
+## C2 companion lifecycle evidence
+
+The C2.7 integrated PostgreSQL 17 acceptance used 160 synthetic guests, 66
+established entitlements, 77 admitted attempts, and 10 corrections. Its bounded
+statement observations were 4 for inspection, 9 for PRIMARY admission, 8 for
+COMPANION admission, 4 for exact replay, 7 for correction, 1 for aggregate report,
+and 1 for guest report. These local measurements are engineering observations,
+not production SLAs or permanent architecture requirements.
+
+The complete C2.7 repository-safe suite collected 932 tests: 928 passed and 4
+staging-only tests were skipped, with zero failures, XFAIL, XPASS, or warnings and
+92.34% branch coverage. C2.8 repeats the integrated acceptance, migration checks,
+complete suite, quality gates, privacy audits, and archive hygiene before creating
+its documentation-only closeout commit.
+
 ## H2 scale evidence
 
 H2.7 accepted the 5,000-candidate product ceiling. Synthetic parser samples were

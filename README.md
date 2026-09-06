@@ -48,7 +48,7 @@ and production.
 
 ```text
 backend/app/                 application, routes, services, repositories, models
-backend/alembic/             linear PostgreSQL migrations through 20260821_0008
+backend/alembic/             linear PostgreSQL migrations through 20260906_0013
 backend/tests/               unit/API/service and PostgreSQL integration tests
 docs/                        authoritative engineering and product contracts
 compose.yaml                 local development PostgreSQL 17

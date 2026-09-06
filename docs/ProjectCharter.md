@@ -19,9 +19,10 @@ A private GitHub repository is established and the three permanent branches have
 been pushed. Backend GitHub Actions CI is operational, Dependabot automation is
 complete, and GitHub-hosted branch protection/ruleset enforcement is deferred
 because of the private-plan limitation; the linear fast-forward procedure remains
-mandatory. Excel ingestion is hardened through H2. Flutter remains intentionally
-unimplemented and deferred until companion entitlement lifecycle hardening is
-separately audited, contracted, and completed.
+mandatory. Excel ingestion is hardened through H2. The stacked C2 backend tree now
+implements and accepts the companion entitlement lifecycle through event-day
+scanning, corrections, and reports. Flutter remains intentionally unimplemented,
+and permanent-branch integration of C2 requires a separate authorization.
 
 ## Primary user
 
@@ -51,6 +52,9 @@ administrator authentication -> event and guest policy -> staged Excel import
   manifest-driven renderer;
 - preview QR is synthetic while permanent cards use protected images of real,
   event/guest-bound opaque credentials whose raw values are not stored;
+- one invitation holder owns a companion entitlement lifecycle: invitation maximum,
+  locked declaration, cumulative admitted companions, and remaining declared slots
+  are distinct; companions do not receive guest identities, credentials, or cards;
 - gate evidence is immutable, corrections are append-only, and reports preserve
   raw-versus-effective attendance semantics;
 - private guest, workbook, photo, template, QR, card, report, secret, and database
@@ -72,9 +76,8 @@ Backend technical release finalization and the authorized private-repository
 baseline are complete. The accepted technical release evidence remains associated
 with `6891e644472e81d5bc3690dc9ebc53fff9511ebf`; a later documentation-only
 governance commit does not imply that the full release suite was rerun on that
-newer commit. H2 has a separate dated closeout baseline. Companion entitlement
-lifecycle hardening remains the next backend program; it must distinguish
-invitation maximum, first-scan declared entitlement, remaining slots, and actual
-admission without treating that planned behavior as implemented. Public licensing
-or publication, deployment, future remote changes or pushes, and Flutter
-implementation remain separately controlled work.
+newer commit. H2 has a separate dated closeout baseline. C2 has its own stacked,
+synthetic PostgreSQL acceptance evidence and is not yet integrated into the
+permanent branches. Public licensing or publication, deployment, future remote
+changes or pushes, permanent-branch promotion, and Flutter implementation remain
+separately controlled work.

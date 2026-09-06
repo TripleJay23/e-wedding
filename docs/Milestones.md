@@ -20,7 +20,7 @@ accepted product display name is `e-Wedding` and the local repository slug is
 | M9 | Shared privacy-safe JSON, CSV, and XLSX reports | COMPLETE |
 | M10 | Continuous S1-S13 staging journey and full backend replay/release gate | COMPLETE |
 
-The accepted schema head is `20260821_0008`. The technical release baseline is
+The accepted stacked C2 schema head is `20260906_0013`. The earlier technical release baseline is
 `6891e644472e81d5bc3690dc9ebc53fff9511ebf`; its accepted release verification has
 537 passed tests, 4 deliberate staging-only skips, and 91.12% branch-aware
 coverage. Later documentation-only governance commits do not represent a rerun of
@@ -68,17 +68,31 @@ the required hosted enforcement.
 | H2.7 | Hostile-package security and 5,000-candidate scale acceptance | PASS |
 | H2.8 | Documentation, final reconciliation, and release verification | COMPLETE |
 
-H2 introduced no migrations or breaking API changes; schema head remains
+H2 introduced no migrations or breaking API changes; its schema head remained
 `20260821_0008`. The dated H2.7 baseline is 739 collected, 735 passed, 4
 staging-only skips, no failures or warnings, and 92.20% branch-aware coverage.
 
-The next backend checkpoint after H2 is **C1 — Companion Entitlement Lifecycle
-Current-State Audit & Contract**. Current reporting distinguishes invitation
-holders, companion capacity, maximum invited population, actual admitted
-companions, and actual attendance. The planned first-scan declaration lock,
-remaining-slot semantics, and any schema/API changes are not implemented yet.
-Flutter therefore remains not started and is not the next checkpoint.
+## Companion entitlement lifecycle
+
+| Checkpoint | Durable outcome | Status |
+|---|---|---|
+| C1 | Current-state audit and backend/Flutter contract | COMPLETE |
+| C2.1 | Strict characterization of pre-C2 gaps | COMPLETE |
+| C2.2–C2.2C | Entitlement, attempt outcome/reference, and correction-origin persistence | COMPLETE |
+| C2.3 | Transactional PRIMARY/COMPANION state machine and idempotency | COMPLETE |
+| C2.4 | Read-only inspect and explicit admit scanner API | COMPLETE |
+| C2.5–C2.5A | Append-only companion correction persistence and behavior | COMPLETE |
+| C2.6 | Raw/effective report metrics and export privacy | COMPLETE |
+| C2.7 | Integrated synthetic event-day PostgreSQL acceptance | PASS |
+| C2.8 | Documentation and release closeout | COMPLETE |
+
+C2.7 accepted 932 collected tests, 928 passed, 4 staging-only skips, no failures,
+XFAIL, XPASS, or warnings, and 92.34% branch-aware coverage. The implementation
+distinguishes invitation capacity, locked declaration, effective and raw admitted
+companions, remaining declared slots, and released versus uncommitted allowance.
+The stacked C2 history remains on feature branches until separately authorized
+permanent-branch integration. Flutter remains not started.
 
 The public license, public sample strategy, Docker identity or volume migration,
-deployment, future remote changes or pushes, C1 implementation, and Flutter work
+deployment, future remote changes or pushes, C2 integration, and Flutter work
 require their own explicit authorization.

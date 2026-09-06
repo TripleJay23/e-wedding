@@ -78,19 +78,35 @@ enforced.
 ## Attendance and correction integrity
 
 Successful gate attendance and meaningful scan attempts are immutable evidence.
-Companion admission is rechecked against current guest/event policy in the scan
-transaction. Corrections never rewrite gate truth: they are append-only,
-administrator-attributed revisions using optimistic expectations and closed
-decisions. Sensitive reason notes are returned only by the dedicated audit-detail
-surface.
+Inspection is read-only and creates no reservation or attempt evidence. Admission
+revalidates credential, event, guest, attendance, correction, and entitlement state
+transactionally; non-active events cannot admit. A caller-generated request ID
+makes exact admission-command retries authoritative and consume capacity once,
+while conflicting reuse fails with `IDEMPOTENCY_KEY_REUSED`. The deprecated legacy
+scan route creates a fresh request ID and must not be treated as retry-idempotent.
+
+Companion admission is rechecked against current guest/event policy and locked
+entitlement in the admission transaction. Corrections never rewrite gate truth:
+they are append-only, administrator-attributed revisions using optimistic
+expectations and closed decisions. Companion-state correction captures previous
+state server-side and cannot raise effective admissions above immutable physical
+evidence. Sensitive reason notes are returned only by the dedicated audit-detail
+surface and remain absent from reports.
 
 ## Report privacy
 
-JSON, CSV, and XLSX share one read-only bounded dataset. Exports use an explicit
-identifier/state/count allowlist and exclude names, email, phone, notes,
-table/category, QR/card details, correction notes, and actor identities. CSV/XLSX
-cells are neutralized against formula injection. Private responses use
-non-cacheable headers.
+JSON, CSV, and XLSX share one read-only bounded dataset. Aggregate reports are
+de-identified and contain no guest identity, contact, credential, or
+correction-sensitive details. Authenticated administrator guest-level reports and
+exports may include the operational fields guest ID, full name, invitation type,
+table number, and category together with attendance/companion state.
+
+All report forms exclude phone number, email, raw QR/token material, verifier
+hashes, correction reason/note, correction actor identity, internal entitlement or
+provenance IDs, and filesystem/internal paths. CSV/XLSX cells are neutralized
+against formula injection. Private responses use non-cacheable headers. The
+guest-level operational identity allowance supersedes the former blanket claim
+that name, table, and category were excluded from every export.
 
 ## Git and publication boundary
 
