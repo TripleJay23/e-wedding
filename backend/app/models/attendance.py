@@ -51,6 +51,28 @@ class GateArrivalMode(StrEnum):
     COMPANION = "COMPANION"
 
 
+class GateInspectionState(StrEnum):
+    """Closed, non-persisted scanner states for read-only credential inspection."""
+
+    READY_FOR_PRIMARY = "READY_FOR_PRIMARY"
+    READY_FOR_COMPANION = "READY_FOR_COMPANION"
+    ENTITLEMENT_EXHAUSTED = "ENTITLEMENT_EXHAUSTED"
+    ADMISSION_LOCKED = "ADMISSION_LOCKED"
+    UNKNOWN_CREDENTIAL = "UNKNOWN_CREDENTIAL"
+    WRONG_EVENT = "WRONG_EVENT"
+    INACTIVE_CREDENTIAL = "INACTIVE_CREDENTIAL"
+    SUPERSEDED_CREDENTIAL = "SUPERSEDED_CREDENTIAL"
+    INELIGIBLE_GUEST = "INELIGIBLE_GUEST"
+    EVENT_NOT_ACTIVE = "EVENT_NOT_ACTIVE"
+
+
+class GatePermittedAction(StrEnum):
+    """Explicit admission actions that the server currently permits."""
+
+    PRIMARY = "PRIMARY"
+    COMPANION = "COMPANION"
+
+
 class AttendancePersistenceError(ValueError):
     """Raised when ORM workflows try to rewrite immutable M7 evidence."""
 

@@ -41,6 +41,8 @@ def test_health_remains_available_with_m9_route_inventory(development_settings: 
     assert set(app.openapi()["paths"]) == {
         "/api/v1/auth/login",
         "/api/v1/auth/me",
+        "/api/v1/attendance/admit",
+        "/api/v1/attendance/inspect",
         "/api/v1/attendance/scan",
         "/api/v1/events",
         "/api/v1/events/{event_id}",

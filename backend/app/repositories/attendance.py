@@ -49,6 +49,29 @@ class AttendanceRepository:
         row = self._session.execute(statement).one_or_none()
         return None if row is None else (row[0], row[1], row[2])
 
+    def resolve_inspection_context(
+        self,
+        event_id: UUID,
+        credential_fingerprint: str,
+    ) -> tuple[GuestQrCredential, Guest, Event] | None:
+        """Resolve one credential and selected event without taking mutation locks."""
+
+        statement = (
+            select(GuestQrCredential, Guest, Event)
+            .select_from(GuestQrCredential)
+            .join(
+                Guest,
+                and_(
+                    Guest.id == GuestQrCredential.guest_id,
+                    Guest.event_id == GuestQrCredential.event_id,
+                ),
+            )
+            .join(Event, Event.id == event_id)
+            .where(GuestQrCredential.token_hash == credential_fingerprint)
+        )
+        row = self._session.execute(statement).one_or_none()
+        return None if row is None else (row[0], row[1], row[2])
+
     def get_event(self, event_id: UUID) -> Event | None:
         return self._session.get(Event, event_id)
 
@@ -90,6 +113,17 @@ class AttendanceRepository:
                 GuestCompanionEntitlement.guest_id == guest_id,
             )
             .with_for_update(of=GuestCompanionEntitlement)
+        )
+        return self._session.execute(statement).scalar_one_or_none()
+
+    def get_entitlement(
+        self,
+        event_id: UUID,
+        guest_id: UUID,
+    ) -> GuestCompanionEntitlement | None:
+        statement = select(GuestCompanionEntitlement).where(
+            GuestCompanionEntitlement.event_id == event_id,
+            GuestCompanionEntitlement.guest_id == guest_id,
         )
         return self._session.execute(statement).scalar_one_or_none()
 

@@ -3,6 +3,8 @@
 from app.models.administrator import Administrator, AdministratorRole
 from app.models.attendance import (
     GateArrivalMode,
+    GateInspectionState,
+    GatePermittedAction,
     GateScanAttempt,
     GateScanOutcome,
     GuestAttendanceRecord,
@@ -56,6 +58,8 @@ __all__ = [
     "EventPhoto",
     "EventStatus",
     "GateArrivalMode",
+    "GateInspectionState",
+    "GatePermittedAction",
     "GateScanAttempt",
     "GateScanOutcome",
     "GeneratedCardStatus",

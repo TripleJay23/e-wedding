@@ -11,6 +11,8 @@ from app.models.attendance import (
 )
 from app.models.attendance import (
     GateArrivalMode,
+    GateInspectionState,
+    GatePermittedAction,
     GateScanAttempt,
     GateScanOutcome,
     GuestAttendanceRecord,
@@ -28,7 +30,12 @@ from app.repositories.attendance_corrections import (
     AttendanceStateSnapshot,
     CorrectionHead,
 )
-from app.schemas.attendance import GateScanRequest, GateScanResponse
+from app.schemas.attendance import (
+    GateAdmitRequest,
+    GateAdmitResponse,
+    GateInspectResponse,
+    GateScanRequest,
+)
 from app.services.attendance import (
     AttendanceIdempotencyConflictError,
     AttendancePersistenceError,
@@ -122,6 +129,9 @@ class FakeAttendanceRepository:
             return None
         return resolved[0], resolved[1], selected_event
 
+    def resolve_inspection_context(self, event_id, fingerprint):
+        return self.resolve_scan_context_for_update(event_id, fingerprint)
+
     def get_event(self, event_id):
         return self.events.get(event_id)
 
@@ -149,6 +159,9 @@ class FakeAttendanceRepository:
         if entitlement is not None and self.entitlement_original is None:
             self.entitlement_original = (entitlement, entitlement.companions_admitted)
         return entitlement
+
+    def get_entitlement(self, event_id, guest_id):
+        return self.entitlements.get((event_id, guest_id))
 
     def get_attendance_state_snapshot(self, event_id, guest_id):
         guest = self.get_guest(event_id, guest_id)
@@ -649,7 +662,7 @@ def _future_entitlement_table():
 def _scan_command_has_arrival_mode() -> bool:
     return any(
         "arrival" in field_name and "mode" in field_name
-        for field_name in GateScanRequest.model_fields
+        for field_name in GateAdmitRequest.model_fields
     )
 
 
@@ -668,31 +681,20 @@ def test_c21_target_declaration_information_is_preserved() -> None:
     assert repository.attempts[-1].requested_declared_companions == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: a later companion arrival consumes remaining declared entitlement",
-)
 def test_c21_target_later_companion_arrival_is_expressible() -> None:
     assert _scan_command_has_arrival_mode()
     assert _future_entitlement_table() is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: declared zero keeps a valid invitation distinct from an invalid credential",
-)
 def test_c21_target_declared_zero_returns_no_remaining_entitlement() -> None:
     assert _scan_command_has_arrival_mode()
     assert _future_entitlement_table() is not None
     assert any(
-        "remaining" in name and "companion" in name for name in GateScanResponse.model_fields
+        "remaining" in name and "companion" in name
+        for name in GateInspectResponse.model_fields | GateAdmitResponse.model_fields
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: companion before primary returns PRIMARY_REQUIRED without mutation",
-)
 def test_c21_target_companion_before_primary_is_rejected_distinctly() -> None:
     assert _scan_command_has_arrival_mode()
     assert "PRIMARY_REQUIRED" in GateScanOutcome.__members__
@@ -740,12 +742,8 @@ def test_c21_target_last_slot_is_protected_by_persistence_invariant() -> None:
     assert "companions_admitted" in check_sql
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C2 target: mutation requests carry a persisted idempotency UUID",
-)
 def test_c21_target_scan_mutation_supports_idempotent_replay() -> None:
-    assert "request_id" in GateScanRequest.model_fields
+    assert "request_id" in GateAdmitRequest.model_fields
     assert "request_id" in GateScanAttempt.__table__.columns
 
 
@@ -834,6 +832,217 @@ def establish_correction_origin(
         created_at=NOW,
     )
     return entitlement
+
+
+@pytest.mark.parametrize("allowed", [0, 1, 2])
+def test_c24_inspection_pre_primary_is_read_only_and_preserves_null_entitlement(
+    allowed: int,
+) -> None:
+    service, repository, event, guest, _, raw = build_service(guest_allowance=allowed)
+
+    result = service.inspect(event_id=event.id, presented_credential=raw)
+
+    assert result.inspection_state is GateInspectionState.READY_FOR_PRIMARY
+    assert result.permitted_actions == [GatePermittedAction.PRIMARY]
+    assert result.guest_id == guest.id
+    assert result.primary_attended is False
+    assert result.primary_admission_locked is False
+    assert result.allowed_companions == allowed
+    assert result.declared_companions is None
+    assert result.companions_admitted is None
+    assert result.remaining_companion_slots is None
+    assert repository.attendance == {}
+    assert repository.entitlements == {}
+    assert repository.attempts == []
+    assert repository.commits == 0
+
+
+@pytest.mark.parametrize(
+    ("declared", "entering", "expected_state", "expected_actions"),
+    [
+        (0, 0, GateInspectionState.ENTITLEMENT_EXHAUSTED, []),
+        (2, 0, GateInspectionState.READY_FOR_COMPANION, [GatePermittedAction.COMPANION]),
+        (2, 1, GateInspectionState.READY_FOR_COMPANION, [GatePermittedAction.COMPANION]),
+        (2, 2, GateInspectionState.ENTITLEMENT_EXHAUSTED, []),
+    ],
+)
+def test_c24_inspection_projects_gate_origin_entitlement(
+    declared: int,
+    entering: int,
+    expected_state: GateInspectionState,
+    expected_actions: list[GatePermittedAction],
+) -> None:
+    service, repository, event, _, _, raw = build_service()
+    service.admit(
+        admission_command(
+            event,
+            raw,
+            mode=GateArrivalMode.PRIMARY,
+            declared=declared,
+            entering=entering,
+        )
+    )
+    attempts_before = len(repository.attempts)
+    commits_before = repository.commits
+
+    result = service.inspect(event_id=event.id, presented_credential=raw)
+
+    assert result.inspection_state is expected_state
+    assert result.permitted_actions == expected_actions
+    assert result.primary_attended is True
+    assert result.primary_admission_locked is True
+    assert result.declared_companions == declared
+    assert result.companions_admitted == entering
+    assert result.remaining_companion_slots == declared - entering
+    assert len(repository.attempts) == attempts_before
+    assert repository.commits == commits_before
+
+
+def test_c24_inspection_projects_correction_origin_and_locked_not_attended() -> None:
+    service, repository, event, guest, _, raw = build_service()
+    entitlement = establish_correction_origin(repository, event, guest, declared=2, admitted=1)
+
+    ready = service.inspect(event_id=event.id, presented_credential=raw)
+    assert ready.inspection_state is GateInspectionState.READY_FOR_COMPANION
+    assert ready.remaining_companion_slots == 1
+
+    repository.latest_corrections[(event.id, guest.id)] = CorrectionHead(
+        id=uuid4(),
+        revision_number=2,
+        decision=AttendanceCorrectionDecision.SET_NOT_ATTENDED,
+        companions_admitted=None,
+        created_at=NOW,
+    )
+    locked = service.inspect(event_id=event.id, presented_credential=raw)
+    assert locked.inspection_state is GateInspectionState.ADMISSION_LOCKED
+    assert locked.permitted_actions == []
+    assert locked.primary_attended is False
+    assert locked.primary_admission_locked is True
+    assert locked.declared_companions == entitlement.declared_companions
+
+
+@pytest.mark.parametrize(
+    ("credential_status", "guest_status", "expected"),
+    [
+        (QrCredentialStatus.INACTIVE, GuestStatus.ACTIVE, GateInspectionState.INACTIVE_CREDENTIAL),
+        (
+            QrCredentialStatus.SUPERSEDED,
+            GuestStatus.ACTIVE,
+            GateInspectionState.SUPERSEDED_CREDENTIAL,
+        ),
+        (QrCredentialStatus.ACTIVE, GuestStatus.INACTIVE, GateInspectionState.INELIGIBLE_GUEST),
+    ],
+)
+def test_c24_invalid_lifecycle_inspection_omits_guest_identity(
+    credential_status: QrCredentialStatus,
+    guest_status: GuestStatus,
+    expected: GateInspectionState,
+) -> None:
+    service, _, event, _, _, raw = build_service(
+        credential_status=credential_status,
+        guest_status=guest_status,
+    )
+    result = service.inspect(event_id=event.id, presented_credential=raw)
+    assert result.inspection_state is expected
+    assert result.permitted_actions == []
+    assert result.guest_id is None
+    assert result.guest_display_name is None
+
+
+def test_c24_unknown_and_wrong_event_inspection_are_distinct_and_private() -> None:
+    service, repository, event, _, _, raw = build_service()
+    unknown = service.inspect(event_id=event.id, presented_credential="A" * 32)
+
+    other_event = make_event()
+    repository.events[other_event.id] = other_event
+    wrong = service.inspect(event_id=other_event.id, presented_credential=raw)
+
+    assert unknown.inspection_state is GateInspectionState.UNKNOWN_CREDENTIAL
+    assert wrong.inspection_state is GateInspectionState.WRONG_EVENT
+    for result in (unknown, wrong):
+        assert result.permitted_actions == []
+        assert result.guest_id is None
+        assert result.guest_display_name is None
+        assert result.allowed_companions is None
+
+
+def test_c24_regenerated_active_credential_inspects_current_guest_state() -> None:
+    service, repository, event, guest, previous, _ = build_service()
+    raw = generate_qr_credential()
+    regenerated = make_credential(event.id, guest.id, raw)
+    regenerated.replaces_credential_id = previous.id
+    repository.credentials[regenerated.token_hash] = (regenerated, guest)
+
+    result = service.inspect(event_id=event.id, presented_credential=raw)
+
+    assert result.inspection_state is GateInspectionState.READY_FOR_PRIMARY
+    assert result.guest_id == guest.id
+
+
+def test_c24_stale_primary_inspection_cannot_overwrite_winning_declaration() -> None:
+    service, repository, event, guest, _, raw = build_service()
+    inspected = service.inspect(event_id=event.id, presented_credential=raw)
+    assert inspected.inspection_state is GateInspectionState.READY_FOR_PRIMARY
+
+    winner = service.admit(
+        admission_command(
+            event,
+            raw,
+            mode=GateArrivalMode.PRIMARY,
+            declared=1,
+            entering=0,
+        )
+    )
+    stale = service.admit(
+        admission_command(
+            event,
+            raw,
+            mode=GateArrivalMode.PRIMARY,
+            declared=2,
+            entering=0,
+        )
+    )
+
+    assert winner.outcome is GateScanOutcome.ADMITTED
+    assert stale.outcome is GateScanOutcome.ALREADY_CHECKED_IN
+    assert stale.declared_companions == 1
+    assert repository.entitlements[(event.id, guest.id)].declared_companions == 1
+
+
+def test_c24_stale_last_slot_inspection_cannot_oversubscribe() -> None:
+    service, repository, event, guest, _, raw = build_service()
+    service.admit(
+        admission_command(
+            event,
+            raw,
+            mode=GateArrivalMode.PRIMARY,
+            declared=1,
+            entering=0,
+        )
+    )
+    inspected = service.inspect(event_id=event.id, presented_credential=raw)
+    assert inspected.remaining_companion_slots == 1
+
+    winner = service.admit(
+        admission_command(event, raw, mode=GateArrivalMode.COMPANION, entering=1)
+    )
+    stale = service.admit(admission_command(event, raw, mode=GateArrivalMode.COMPANION, entering=1))
+
+    assert winner.outcome is GateScanOutcome.ADMITTED
+    assert stale.outcome is GateScanOutcome.COMPANION_ENTITLEMENT_EXHAUSTED
+    assert repository.entitlements[(event.id, guest.id)].companions_admitted == 1
+
+
+@pytest.mark.parametrize(
+    "status", [EventStatus.DRAFT, EventStatus.COMPLETED, EventStatus.CANCELLED]
+)
+def test_c24_event_not_active_inspection_is_non_actionable_and_private(status: EventStatus) -> None:
+    service, repository, event, _, _, raw = build_service(event_status=status)
+    result = service.inspect(event_id=event.id, presented_credential=raw)
+    assert result.inspection_state is GateInspectionState.EVENT_NOT_ACTIVE
+    assert result.permitted_actions == []
+    assert result.guest_id is None
+    assert repository.attempts == []
 
 
 @pytest.mark.parametrize(

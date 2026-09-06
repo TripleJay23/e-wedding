@@ -10,15 +10,21 @@ from app.models.administrator import Administrator
 from app.schemas.attendance import (
     AttendanceListResponse,
     AttendanceRecordResponse,
+    GateAdmitRequest,
+    GateAdmitResponse,
+    GateInspectRequest,
+    GateInspectResponse,
     GateScanAttemptListResponse,
     GateScanRequest,
     GateScanResponse,
 )
 from app.services.attendance import (
+    AttendanceIdempotencyConflictError,
     AttendancePersistenceError,
     AttendanceRequestError,
     AttendanceResourceNotFoundError,
     AttendanceService,
+    GateAdmissionCommand,
 )
 
 router = APIRouter(tags=["attendance"])
@@ -40,7 +46,7 @@ def _translate_domain_error(exc: Exception) -> None:
     raise exc
 
 
-@router.post("/attendance/scan", response_model=GateScanResponse)
+@router.post("/attendance/scan", response_model=GateScanResponse, deprecated=True)
 def scan_attendance(
     payload: GateScanRequest,
     administrator: Annotated[Administrator, Depends(get_current_administrator)],
@@ -62,6 +68,62 @@ def scan_attendance(
     ) as exc:
         _translate_domain_error(exc)
     return GateScanResponse.model_validate(result)
+
+
+@router.post("/attendance/inspect", response_model=GateInspectResponse)
+def inspect_attendance(
+    payload: GateInspectRequest,
+    _: Annotated[Administrator, Depends(get_current_administrator)],
+    service: Annotated[AttendanceService, Depends(get_attendance_service)],
+) -> GateInspectResponse:
+    """Inspect current gate state without creating attendance or scan evidence."""
+
+    try:
+        result = service.inspect(
+            event_id=payload.event_id,
+            presented_credential=payload.credential,
+        )
+    except (
+        AttendanceResourceNotFoundError,
+        AttendanceRequestError,
+        AttendancePersistenceError,
+    ) as exc:
+        _translate_domain_error(exc)
+    return GateInspectResponse.model_validate(result)
+
+
+@router.post("/attendance/admit", response_model=GateAdmitResponse)
+def admit_attendance(
+    payload: GateAdmitRequest,
+    administrator: Annotated[Administrator, Depends(get_current_administrator)],
+    service: Annotated[AttendanceService, Depends(get_attendance_service)],
+) -> GateAdmitResponse:
+    """Execute or replay one explicit authoritative gate admission command."""
+
+    try:
+        result = service.admit(
+            GateAdmissionCommand(
+                request_id=payload.request_id,
+                event_id=payload.event_id,
+                presented_credential=payload.credential,
+                arrival_mode=payload.arrival_mode,
+                declared_companions=payload.declared_companions,
+                companions_entering_now=payload.companions_entering_now,
+                administrator_id=administrator.id,
+            )
+        )
+    except AttendanceIdempotencyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code},
+        ) from exc
+    except (
+        AttendanceResourceNotFoundError,
+        AttendanceRequestError,
+        AttendancePersistenceError,
+    ) as exc:
+        _translate_domain_error(exc)
+    return GateAdmitResponse.model_validate(result)
 
 
 @router.get(

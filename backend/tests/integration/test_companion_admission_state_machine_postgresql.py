@@ -1,7 +1,8 @@
-"""Opt-in PostgreSQL C2.3 state-machine and concurrency acceptance."""
+"""Opt-in PostgreSQL C2.3 state-machine and C2.4 scanner API acceptance."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from threading import Barrier
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy import event as sqlalchemy_event
@@ -17,8 +19,11 @@ from sqlalchemy.orm import Session
 from app.cli import disposable_alembic
 from app.core.security import AuthenticationSecurity
 from app.core.settings import Settings
+from app.db.runtime import DatabaseRuntime
+from app.main import create_app
 from app.models.attendance import (
     GateArrivalMode,
+    GateInspectionState,
     GateScanAttempt,
     GateScanOutcome,
     GuestAttendanceRecord,
@@ -177,6 +182,24 @@ def observe_admission_sql(
     return result, len(statements)
 
 
+def observe_inspection_sql(engine, *, event_id: UUID, raw: str) -> tuple[object, int]:
+    statements: list[str] = []
+
+    def record_statement(*args) -> None:
+        statements.append(str(args[2]))
+
+    sqlalchemy_event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        with Session(engine, expire_on_commit=False, autoflush=False) as session:
+            result = AttendanceService(AttendanceRepository(session)).inspect(
+                event_id=event_id,
+                presented_credential=raw,
+            )
+    finally:
+        sqlalchemy_event.remove(engine, "before_cursor_execute", record_statement)
+    return result, len(statements)
+
+
 def assert_one_primary_state(engine, event_id: UUID, guest_id: UUID) -> None:
     with Session(engine) as session:
         assert (
@@ -211,6 +234,302 @@ def truncate_synthetic_admission_evidence(engine) -> None:
                 "guest_attendance_corrections, guest_attendance_records CASCADE"
             )
         )
+
+
+async def exercise_c24_api(
+    settings: Settings,
+    *,
+    username: str,
+    event_id: UUID,
+    raw: str,
+    stale_primary_raw: str,
+    correction_raw: str,
+) -> dict[str, dict]:
+    runtime = DatabaseRuntime(settings)
+    app = create_app(
+        settings,
+        database_runtime=runtime,
+        authentication_security=AuthenticationSecurity.from_settings(settings),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://synthetic.test") as client,
+    ):
+        login = await client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "synthetic administrator password"},
+        )
+        assert login.status_code == 200
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+        async def inspect(credential: str):
+            response = await client.post(
+                "/api/v1/attendance/inspect",
+                headers=headers,
+                json={"event_id": str(event_id), "credential": credential},
+            )
+            assert response.status_code == 200
+            return response.json()
+
+        async def admit(
+            credential: str,
+            *,
+            request_id: UUID,
+            mode: str,
+            entering: int,
+            declared: int | None = None,
+        ):
+            payload = {
+                "request_id": str(request_id),
+                "event_id": str(event_id),
+                "credential": credential,
+                "arrival_mode": mode,
+                "companions_entering_now": entering,
+            }
+            if declared is not None:
+                payload["declared_companions"] = declared
+            response = await client.post(
+                "/api/v1/attendance/admit",
+                headers=headers,
+                json=payload,
+            )
+            assert response.status_code == 200
+            return response.json()
+
+        primary_request_id = uuid4()
+        companion_request_id = uuid4()
+        results = {"initial": await inspect(raw)}
+        results["primary"] = await admit(
+            raw,
+            request_id=primary_request_id,
+            mode="PRIMARY",
+            declared=2,
+            entering=0,
+        )
+        results["primary_replay"] = await admit(
+            raw,
+            request_id=primary_request_id,
+            mode="PRIMARY",
+            declared=2,
+            entering=0,
+        )
+        results["after_primary"] = await inspect(raw)
+        results["companion"] = await admit(
+            raw,
+            request_id=companion_request_id,
+            mode="COMPANION",
+            entering=1,
+        )
+        results["after_companion"] = await inspect(raw)
+        results["replay"] = await admit(
+            raw,
+            request_id=companion_request_id,
+            mode="COMPANION",
+            entering=1,
+        )
+        conflict = await client.post(
+            "/api/v1/attendance/admit",
+            headers=headers,
+            json={
+                "request_id": str(companion_request_id),
+                "event_id": str(event_id),
+                "credential": raw,
+                "arrival_mode": "COMPANION",
+                "companions_entering_now": 2,
+            },
+        )
+        results["idempotency_conflict"] = {
+            "status_code": conflict.status_code,
+            "body": conflict.json(),
+        }
+        results["stale_companion_inspection"] = await inspect(raw)
+        results["last_slot"] = await admit(
+            raw,
+            request_id=uuid4(),
+            mode="COMPANION",
+            entering=1,
+        )
+        results["stale_companion_denial"] = await admit(
+            raw,
+            request_id=uuid4(),
+            mode="COMPANION",
+            entering=1,
+        )
+        results["exhausted"] = await inspect(raw)
+
+        results["stale_primary_inspection"] = await inspect(stale_primary_raw)
+        results["primary_winner"] = await admit(
+            stale_primary_raw,
+            request_id=uuid4(),
+            mode="PRIMARY",
+            declared=1,
+            entering=0,
+        )
+        results["stale_primary_denial"] = await admit(
+            stale_primary_raw,
+            request_id=uuid4(),
+            mode="PRIMARY",
+            declared=2,
+            entering=0,
+        )
+        results["correction_inspection"] = await inspect(correction_raw)
+        results["correction_companion"] = await admit(
+            correction_raw,
+            request_id=uuid4(),
+            mode="COMPANION",
+            entering=1,
+        )
+        return results
+
+
+def test_c24_postgresql_two_step_api_and_stale_inspection_safety(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = configure_test_environment(monkeypatch, tmp_path)
+    assert DISPOSABLE_URL is not None
+    assert disposable_alembic.main(["downgrade", "base"]) == 0
+    assert disposable_alembic.main(["upgrade", "head"]) == 0
+    assert disposable_alembic.main(["check"]) == 0
+
+    engine = create_engine(DISPOSABLE_URL, pool_pre_ping=True)
+    try:
+        username = f"c24-admin-{uuid4().hex[:8]}"
+        with Session(engine, expire_on_commit=False) as session:
+            administrator = AdministratorProvisioningService(
+                AdministratorRepository(session),
+                AuthenticationSecurity.from_settings(settings).passwords,
+            ).provision(username, "synthetic administrator password")
+            selected_event = make_event(administrator.id)
+            session.add(selected_event)
+            session.flush()
+            session.add_all(
+                [
+                    EventGuestField(
+                        id=uuid4(),
+                        event_id=selected_event.id,
+                        field_key=field_key,
+                        enabled=enabled,
+                        required=required,
+                        sort_order=sort_order,
+                    )
+                    for sort_order, (field_key, enabled, required) in enumerate(
+                        DEFAULT_GUEST_FIELD_CONFIGURATION
+                    )
+                ]
+            )
+            guest, raw = add_guest_credential(session, selected_event, administrator.id)
+            stale_guest, stale_primary_raw = add_guest_credential(
+                session, selected_event, administrator.id
+            )
+            correction_guest, correction_raw = add_guest_credential(
+                session, selected_event, administrator.id
+            )
+            session.commit()
+
+        with Session(engine, expire_on_commit=False) as session:
+            correction = AttendanceCorrectionService(
+                AttendanceCorrectionRepository(session)
+            ).record_correction(
+                event_id=selected_event.id,
+                guest_id=correction_guest.id,
+                expected_correction_revision=0,
+                expected_effective_status=EffectiveAttendanceStatus.NOT_ATTENDED,
+                decision=AttendanceCorrectionDecision.SET_ATTENDED,
+                reason_code=AttendanceCorrectionReason.MISSED_GATE_SCAN,
+                reason_note=None,
+                companions_admitted=0,
+                administrator_id=administrator.id,
+            )
+            session.add(
+                GuestCompanionEntitlement(
+                    id=uuid4(),
+                    event_id=selected_event.id,
+                    guest_id=correction_guest.id,
+                    primary_attendance_id=None,
+                    establishing_correction_id=correction.correction.id,
+                    declared_companions=2,
+                    companions_admitted=0,
+                )
+            )
+            session.commit()
+
+        initial_inspection, inspection_queries = observe_inspection_sql(
+            engine,
+            event_id=selected_event.id,
+            raw=raw,
+        )
+        assert initial_inspection.inspection_state is GateInspectionState.READY_FOR_PRIMARY
+        assert inspection_queries == 4
+
+        results = asyncio.run(
+            exercise_c24_api(
+                settings,
+                username=username,
+                event_id=selected_event.id,
+                raw=raw,
+                stale_primary_raw=stale_primary_raw,
+                correction_raw=correction_raw,
+            )
+        )
+        assert results["initial"]["inspection_state"] == GateInspectionState.READY_FOR_PRIMARY
+        assert results["primary"]["outcome"] == GateScanOutcome.ADMITTED
+        assert results["primary_replay"]["scan_attempt_id"] == results["primary"]["scan_attempt_id"]
+        assert results["after_primary"]["remaining_companion_slots"] == 2
+        assert results["companion"]["outcome"] == GateScanOutcome.ADMITTED
+        assert results["after_companion"]["remaining_companion_slots"] == 1
+        assert results["replay"]["scan_attempt_id"] == results["companion"]["scan_attempt_id"]
+        assert results["idempotency_conflict"] == {
+            "status_code": 409,
+            "body": {"detail": {"code": "IDEMPOTENCY_KEY_REUSED"}},
+        }
+        assert results["last_slot"]["outcome"] == GateScanOutcome.ADMITTED
+        assert (
+            results["stale_companion_denial"]["outcome"]
+            == GateScanOutcome.COMPANION_ENTITLEMENT_EXHAUSTED
+        )
+        assert results["exhausted"]["inspection_state"] == GateInspectionState.ENTITLEMENT_EXHAUSTED
+        assert (
+            results["stale_primary_inspection"]["inspection_state"]
+            == GateInspectionState.READY_FOR_PRIMARY
+        )
+        assert results["primary_winner"]["outcome"] == GateScanOutcome.ADMITTED
+        assert results["stale_primary_denial"]["outcome"] == GateScanOutcome.ALREADY_CHECKED_IN
+        assert results["stale_primary_denial"]["declared_companions"] == 1
+        assert (
+            results["correction_inspection"]["inspection_state"]
+            == GateInspectionState.READY_FOR_COMPANION
+        )
+        assert results["correction_companion"]["outcome"] == GateScanOutcome.ADMITTED
+        assert results["correction_companion"]["primary_attended"] is True
+
+        with Session(engine) as session:
+            assert session.scalar(select(func.count()).select_from(GateScanAttempt)) == 7
+            entitlement = session.scalar(
+                select(GuestCompanionEntitlement).where(
+                    GuestCompanionEntitlement.guest_id == guest.id
+                )
+            )
+            stale_entitlement = session.scalar(
+                select(GuestCompanionEntitlement).where(
+                    GuestCompanionEntitlement.guest_id == stale_guest.id
+                )
+            )
+            assert entitlement is not None
+            assert entitlement.companions_admitted == 2
+            assert stale_entitlement is not None
+            assert stale_entitlement.declared_companions == 1
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(GuestAttendanceRecord)
+                    .where(GuestAttendanceRecord.guest_id == correction_guest.id)
+                )
+                == 0
+            )
+    finally:
+        engine.dispose()
 
 
 def test_c23_postgresql_both_origins_and_concurrency(

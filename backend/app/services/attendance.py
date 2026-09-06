@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.models.attendance import (
     GateArrivalMode,
+    GateInspectionState,
+    GatePermittedAction,
     GateScanAttempt,
     GateScanOutcome,
     GuestAttendanceRecord,
@@ -82,6 +84,29 @@ class GateAdmissionResult:
     invitation_type: str | None
     table_number: str | None
     checked_in_at: datetime | None
+
+    @property
+    def admitted(self) -> bool:
+        return self.outcome is GateScanOutcome.ADMITTED
+
+
+@dataclass(frozen=True, slots=True)
+class GateInspectionResult:
+    """Read-only, privacy-bounded projection of current gate admission state."""
+
+    event_id: UUID
+    inspection_state: GateInspectionState
+    permitted_actions: list[GatePermittedAction]
+    guest_id: UUID | None
+    guest_display_name: str | None
+    invitation_type: str | None
+    table_number: str | None
+    primary_attended: bool | None
+    primary_admission_locked: bool | None
+    allowed_companions: int | None
+    declared_companions: int | None
+    companions_admitted: int | None
+    remaining_companion_slots: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +187,90 @@ class AttendanceService:
             )
         )
         return self._legacy_result(result)
+
+    def inspect(
+        self,
+        *,
+        event_id: UUID,
+        presented_credential: str,
+    ) -> GateInspectionResult:
+        """Read current credential and admission state without recording gate evidence."""
+
+        fingerprint = hash_qr_credential(presented_credential)
+        try:
+            context = self._repository.resolve_inspection_context(event_id, fingerprint)
+            if context is None:
+                if self._repository.get_event(event_id) is None:
+                    raise AttendanceResourceNotFoundError("event not found")
+                return self._inspection_result(
+                    event_id=event_id,
+                    inspection_state=GateInspectionState.UNKNOWN_CREDENTIAL,
+                )
+
+            credential, guest, selected_event = context
+            if credential.event_id != selected_event.id:
+                return self._inspection_result(
+                    event_id=event_id,
+                    inspection_state=GateInspectionState.WRONG_EVENT,
+                )
+
+            lifecycle_outcome = self._credential_lifecycle_outcome(credential, guest)
+            if lifecycle_outcome is not None:
+                return self._inspection_result(
+                    event_id=event_id,
+                    inspection_state=GateInspectionState(lifecycle_outcome.value),
+                )
+            if selected_event.status is not EventStatus.ACTIVE:
+                return self._inspection_result(
+                    event_id=event_id,
+                    inspection_state=GateInspectionState.EVENT_NOT_ACTIVE,
+                )
+
+            attendance = self._repository.get_attendance(event_id, guest.id)
+            entitlement = self._repository.get_entitlement(event_id, guest.id)
+            snapshot = self._repository.get_attendance_state_snapshot(event_id, guest.id)
+            if snapshot is None:
+                raise AttendancePersistenceError("gate inspection state could not be read")
+            state = derive_effective_attendance_state(event_id=event_id, snapshot=snapshot)
+            primary_attended = self._is_attended(state)
+            primary_locked = (
+                attendance is not None or entitlement is not None or state.correction_revision > 0
+            )
+
+            declared = None if entitlement is None else entitlement.declared_companions
+            admitted = None if entitlement is None else entitlement.companions_admitted
+            remaining = None if declared is None or admitted is None else declared - admitted
+            if primary_locked and not primary_attended:
+                inspection_state = GateInspectionState.ADMISSION_LOCKED
+                permitted_actions: list[GatePermittedAction] = []
+            elif not primary_locked:
+                inspection_state = GateInspectionState.READY_FOR_PRIMARY
+                permitted_actions = [GatePermittedAction.PRIMARY]
+            elif entitlement is None:
+                raise AttendancePersistenceError("companion entitlement state is missing")
+            elif remaining == 0:
+                inspection_state = GateInspectionState.ENTITLEMENT_EXHAUSTED
+                permitted_actions = []
+            else:
+                inspection_state = GateInspectionState.READY_FOR_COMPANION
+                permitted_actions = [GatePermittedAction.COMPANION]
+
+            return self._inspection_result(
+                event_id=event_id,
+                inspection_state=inspection_state,
+                permitted_actions=permitted_actions,
+                guest=guest,
+                primary_attended=primary_attended,
+                primary_admission_locked=primary_locked,
+                declared_companions=declared,
+                companions_admitted=admitted,
+                remaining_companion_slots=remaining,
+            )
+        except AttendanceCorrectionPersistenceError as exc:
+            raise AttendancePersistenceError("gate inspection state could not be read") from exc
+        except SQLAlchemyError as exc:
+            self._repository.rollback()
+            raise AttendancePersistenceError("gate inspection state could not be read") from exc
 
     def admit(self, command: GateAdmissionCommand) -> GateAdmissionResult:
         """Execute or replay one authoritative internal admission command."""
@@ -799,4 +908,33 @@ class AttendanceService:
             companions_admitted=attendance.companions_admitted,
             admitted_party_size=attendance.admitted_party_size,
             checked_in_at=attendance.checked_in_at,
+        )
+
+    @staticmethod
+    def _inspection_result(
+        *,
+        event_id: UUID,
+        inspection_state: GateInspectionState,
+        permitted_actions: list[GatePermittedAction] | None = None,
+        guest: Guest | None = None,
+        primary_attended: bool | None = None,
+        primary_admission_locked: bool | None = None,
+        declared_companions: int | None = None,
+        companions_admitted: int | None = None,
+        remaining_companion_slots: int | None = None,
+    ) -> GateInspectionResult:
+        return GateInspectionResult(
+            event_id=event_id,
+            inspection_state=inspection_state,
+            permitted_actions=[] if permitted_actions is None else permitted_actions,
+            guest_id=None if guest is None else guest.id,
+            guest_display_name=None if guest is None else guest.full_name,
+            invitation_type=None if guest is None else guest.invitation_type,
+            table_number=None if guest is None else guest.table_number,
+            primary_attended=primary_attended,
+            primary_admission_locked=primary_admission_locked,
+            allowed_companions=None if guest is None else guest.allowed_companions,
+            declared_companions=declared_companions,
+            companions_admitted=companions_admitted,
+            remaining_companion_slots=remaining_companion_slots,
         )
