@@ -23,6 +23,7 @@ __pycache__/
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
 htmlcov/
 .hypothesis/
 .tox/
@@ -95,6 +96,8 @@ desktop.ini
 *.tmp
 *.temp
 *.bak
+*.orig
+*.rej
 *.swp
 *.swo
 
