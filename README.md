@@ -5,12 +5,15 @@ and reporting platform. Its accepted backend uses FastAPI and PostgreSQL.
 
 ## Release status
 
-The FastAPI/PostgreSQL backend is implemented and release-tested through reports.
-Its staged Excel ingestion subsystem is hardened through H2, including hostile
-package checks and 5,000-candidate acceptance. The private GitHub repository has
-operational backend CI and review-first Dependabot updates. Flutter has not been
-implemented; companion entitlement lifecycle hardening remains a separately
-authorized backend checkpoint before Flutter begins.
+The FastAPI/PostgreSQL backend is implemented and release-tested through the C2
+companion entitlement lifecycle, including event-day scanning, append-only
+corrections, and reconciled reports. Its staged Excel ingestion subsystem is
+hardened through H2, including hostile-package checks and 5,000-candidate
+acceptance. The accepted C2 release is integrated across the local permanent
+branches and canonical staging is at Alembic `20260906_0013`. The private GitHub
+repository has operational backend CI and review-first Dependabot updates, but
+the current C2 and release-finalization changes have not yet been published.
+Flutter has not been implemented.
 
 ## Capabilities
 
@@ -95,8 +98,8 @@ production targets.
 
 ## Quality gate
 
-The dated H2.7 acceptance baseline is 739 collected, 735 passed, 4 deliberate
-staging-only skips, no failures or warnings, and 92.20% branch-aware coverage.
+The C2.7 acceptance baseline is 932 collected, 928 passed, 4 deliberate
+staging-only skips, no failures or warnings, and 92.34% branch-aware coverage.
 The repository also requires Ruff, format, compile, locked dependency,
 build/archive, Alembic lifecycle, Compose, privacy, secret, and documentation
 checks. See `docs/TestingStrategy.md`.

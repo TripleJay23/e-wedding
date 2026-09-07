@@ -38,5 +38,6 @@ These durable decisions prevent contract drift.
 | Existing Compose identities, canonical staging volume, and database identities remain unchanged during the product rename | LOCKED |
 | Operational Docker branding is deferred; the unknown legacy Docker volume remains untouched | LOCKED |
 | Backend GitHub Actions CI and review-first Dependabot are operational; G3C hosted enforcement is deferred by the private plan | ACCEPTED |
-| Flutter is blocked until companion entitlement lifecycle hardening is completed under a separate contract | LOCKED |
+| C2 companion entitlement lifecycle acceptance and local permanent-branch integration are complete | ACCEPTED |
+| Flutter remains a separate, not-started phase requiring explicit authorization after release publication and verification | LOCKED |
 | Public license and synthetic publication assets require later owner decisions | OPEN PUBLICATION DECISION |

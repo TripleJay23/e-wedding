@@ -1,7 +1,8 @@
 # e-Wedding Repository Setup
 
-The local repository slug is `e-wedding`. Its private GitHub repository is
-configured, and `main`, `staging`, and `dev` have been pushed. Future remote
+The local and GitHub repository slug is `e-wedding`. Its private GitHub repository
+is configured and contains the earlier pre-C2 baseline. The accepted C2 release
+and release-finalization changes have not yet been published. Future remote
 changes, pushes, and any public publication remain separately controlled.
 
 ## Prerequisites

@@ -90,7 +90,8 @@ also verifies archive hygiene, publication exclusions, licensing position, and
 Git state. Repository rename, remote configuration, publication, main movement,
 and Flutter work each require their own explicit checkpoint.
 
-The stacked C2 companion entitlement lifecycle is implemented and accepted through
-C2.7. C2.8 is its documentation-only release closeout. Permanent-branch review,
-integration, remote operations, and Flutter each remain separate explicitly
-authorized checkpoints.
+The C2 companion entitlement lifecycle is implemented and accepted through C2.8,
+then integrated across the local permanent branches. Canonical staging is accepted
+at Alembic `20260906_0013`. Publication of the current local release remains a
+controlled manual operation; future feature work, deployment, remote changes, and
+Flutter each require separate authorization. Flutter has not started.

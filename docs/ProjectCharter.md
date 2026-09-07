@@ -8,21 +8,21 @@ journey and a future mobile administrator/gate client.
 
 ## Current state
 
-The e-Wedding backend release is finalized. Backend functionality through reports
-passed the continuous staging replay and final release gate, and `main` was
-promoted by pure fast-forward. At the accepted technical release baseline
-`6891e644472e81d5bc3690dc9ebc53fff9511ebf`, `main`, `staging`, and `dev` were
-converged. Repository cleanup, legacy-repository retirement, and the final local
-rename to `e-wedding` are complete.
+The e-Wedding backend release is finalized through C2.8. The companion entitlement
+lifecycle is accepted and integrated across local `dev`, `staging`, and `main`,
+including event-day scanning, append-only corrections, and reconciled reports.
+Canonical staging was forward-migrated to Alembic `20260906_0013` with its data and
+private-resource boundaries preserved. Final repository cleanup is accepted, and
+the former frozen legacy repository has been verified absent and no longer
+required.
 
-A private GitHub repository is established and the three permanent branches have
-been pushed. Backend GitHub Actions CI is operational, Dependabot automation is
+A private GitHub repository is established, and its earlier backend baseline has
+been published. The current C2 and release-finalization changes have not yet been
+published. Backend GitHub Actions CI is operational, Dependabot automation is
 complete, and GitHub-hosted branch protection/ruleset enforcement is deferred
 because of the private-plan limitation; the linear fast-forward procedure remains
-mandatory. Excel ingestion is hardened through H2. The stacked C2 backend tree now
-implements and accepts the companion entitlement lifecycle through event-day
-scanning, corrections, and reports. Flutter remains intentionally unimplemented,
-and permanent-branch integration of C2 requires a separate authorization.
+mandatory. Excel ingestion is hardened through H2. Flutter remains intentionally
+unimplemented.
 
 ## Primary user
 
@@ -73,11 +73,10 @@ administrator authentication -> event and guest policy -> staged Excel import
 ## Release completion boundary
 
 Backend technical release finalization and the authorized private-repository
-baseline are complete. The accepted technical release evidence remains associated
-with `6891e644472e81d5bc3690dc9ebc53fff9511ebf`; a later documentation-only
-governance commit does not imply that the full release suite was rerun on that
-newer commit. H2 has a separate dated closeout baseline. C2 has its own stacked,
-synthetic PostgreSQL acceptance evidence and is not yet integrated into the
-permanent branches. Public licensing or publication, deployment, future remote
-changes or pushes, permanent-branch promotion, and Flutter implementation remain
-separately controlled work.
+baseline are complete. The earlier release evidence remains associated with its
+dated technical baseline; later governance-only changes do not imply an unrecorded
+rerun. H2 and C2 retain their separate acceptance evidence. C2 is integrated into
+the local permanent branches, while the accepted repository-cleanup change remains
+on the release-finalization line pending separate promotion. Publication of the
+current release, deployment, future remote changes or pushes, public licensing,
+and Flutter implementation remain separately controlled work.
